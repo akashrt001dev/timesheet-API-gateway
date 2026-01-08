@@ -189,20 +189,47 @@ class ProxyClient:
             Tuple of (status_code, response_headers, response_body)
         """
         try:
-            # Prepare headers - remove any with null/empty values
-            headers_copy = dict(headers)
-            headers_copy.pop('host', None)
-            
-            # Filter out null/empty headers that cause Java NullPointerException
-            headers_copy = {
-                k: v for k, v in headers_copy.items()
-                if v is not None and (not isinstance(v, str) or v.strip() != '')
+            # Whitelist of safe headers for backend services
+            SAFE_HEADERS = {
+                'authorization',
+                'content-type',
+                'content-length',
+                'accept',
+                'accept-encoding',
+                'accept-language',
+                'user-agent',
+                'x-forwarded-for',
+                'x-forwarded-proto',
+                'x-forwarded-host',
+                'x-real-ip',
+                'x-request-id',
+                'x-correlation-id',
+                'x-tenant-id',
+                'x-user-id',
+                'origin',
+                'referer',
+                'cache-control',
             }
+            
+            # Filter headers using whitelist approach
+            headers_copy = {}
+            for k, v in headers.items():
+                # Skip null/empty values
+                if v is None or (isinstance(v, str) and v.strip() == ''):
+                    continue
+                
+                # Skip host header - HTTP client will set it
+                if k.lower() == 'host':
+                    continue
+                
+                # Only include whitelisted headers
+                if k.lower() in SAFE_HEADERS:
+                    headers_copy[k] = v
             
             # SSL verification: disable for internal services (both HTTP and HTTPS)
             verify_ssl = False
             
-            logger.debug(f"Forwarding {method} {url} with {len(headers_copy)} headers")
+            logger.debug(f"Forwarding {method} {url} with headers: {list(headers_copy.keys())}")
             
             async with httpx.AsyncClient(verify=verify_ssl, timeout=timeout) as client:
                 response = await client.request(
