@@ -10,7 +10,7 @@ from datetime import datetime
 
 from app.config.settings import settings
 from app.models import UserDto, LoginOptionDto
-from app.utils import TokenProcessor, MultiTenantResolver, OAuthClientHelper, ProxyClient, HeaderProcessor
+from app.utils import TokenProcessor, MultiTenantResolver, OAuthClientHelper
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["gateway"])
@@ -441,98 +441,3 @@ async def liveness() -> Dict[str, str]:
 async def readiness() -> Dict[str, str]:
     """Kubernetes readiness probe"""
     return {"status": "UP"}
-
-
-@router.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"], tags=["proxy"])
-async def proxy_service_request(
-    request: Request,
-    full_path: str,
-    authorization: Optional[str] = Header(None)
-) -> Response:
-    """
-    Catch-all proxy route for unknown paths
-    Routes requests to appropriate backend services based on path prefix
-    
-    Args:
-        request: Request object
-        full_path: Full request path
-        authorization: Authorization header
-        
-    Returns:
-        Response from backend service or 404
-    """
-    request_path = f"/{full_path}"
-    
-    # Get known services list
-    known_services = settings.get_known_services()
-    
-    # Check if path starts with a known service name
-    path_parts = full_path.split('/')
-    first_part = path_parts[0] if path_parts else ""
-    
-    if first_part in known_services:
-        # This is a service request
-        service_name = first_part
-        remaining_path = "/" + "/".join(path_parts[1:]) if len(path_parts) > 1 else "/"
-        
-        # Get service configuration
-        service_host = settings.get_service_host(service_name)
-        service_port = settings.get_service_port(service_name)
-        
-        logger.info(f"Routing {service_name} request to {service_host}:{service_port}")
-        
-        if service_port <= 0:
-            logger.error(f"Service {service_name} port not configured")
-            return Response(
-                content=b'{"error": "Service not configured"}',
-                status_code=503,
-                media_type="application/json"
-            )
-        
-        service_url = f"http://{service_host}:{service_port}"
-        full_target_url = f"{service_url.rstrip('/')}{remaining_path}"
-        
-        # Prepare headers
-        headers = dict(request.headers)
-        if authorization:
-            headers['authorization'] = authorization
-        
-        # Get request body
-        body = await request.body() if request.method in ["POST", "PUT", "PATCH"] else None
-        
-        logger.debug(f"Proxying {request.method} {full_target_url}")
-        
-        try:
-            # Forward request to backend service
-            status_code, response_headers, response_body = await ProxyClient.forward_request(
-                method=request.method,
-                url=full_target_url,
-                headers=headers,
-                body=body
-            )
-            
-            # Deduplicate response headers
-            cleaned_headers = HeaderProcessor.dedupe_headers(response_headers)
-            
-            logger.info(f"Service {service_name} response - Status: {status_code}")
-            
-            return Response(
-                content=response_body,
-                status_code=status_code,
-                headers=cleaned_headers
-            )
-        except Exception as e:
-            logger.error(f"Error proxying to {full_target_url}: {str(e)}", exc_info=True)
-            return Response(
-                content=f'{{"error": "Service unavailable"}}'.encode(),
-                status_code=502,
-                media_type="application/json"
-            )
-    
-    # No matching route
-    logger.warning(f"No matching route for: {request_path}")
-    return Response(
-        content=b'{"error": "No matching route"}',
-        status_code=404,
-        media_type="application/json"
-    )
