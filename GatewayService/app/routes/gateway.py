@@ -43,12 +43,13 @@ def extract_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
 async def login(request: Request) -> RedirectResponse:
     """
     Redirect user to Keycloak login page (OIDC Authorization Code Flow)
+    Directly constructs Keycloak auth URL without intermediate redirects
     
     Args:
         request: Request object
         
     Returns:
-        Redirect response to Keycloak authorization endpoint
+        Redirect response directly to Keycloak authorization endpoint
     """
     host = request.headers.get("host", "localhost")
     scheme = settings.get_scheme()
@@ -57,37 +58,35 @@ async def login(request: Request) -> RedirectResponse:
     # Resolve realm from subdomain
     subdomain = MultiTenantResolver.extract_subdomain(host, master_entity)
     
+    logger.info(f"Login request for realm: {subdomain}")
+    
     # Get OAuth2 registration for this realm
     registrations = settings.get_oauth2_registrations()
-    registration = registrations.get(subdomain, {})
+    registration = registrations.get(subdomain)
     
-    if not registration or not registration.get('issuer'):
-        logger.error(f"No OAuth2 registration found for realm: {subdomain}")
+    if not registration:
+        logger.error(f"No OAuth2 registration for realm: {subdomain}")
         return JSONResponse(
             status_code=404,
-            content={"error": f"No OAuth2 configuration for realm: {subdomain}"}
+            content={"error": f"OAuth2 not configured for realm: {subdomain}"}
         )
     
-    # Get configuration from registration
     issuer_uri = registration.get('issuer', '').rstrip('/')
     client_id = registration.get('client_id')
     redirect_uri = registration.get('redirect_uri')
     scope = registration.get('scope', 'openid profile email offline_access roles')
     
-    # Convert comma-separated scopes to space-separated for OAuth2
-    scope = scope.replace(',', ' ').strip()
-    
-    if not client_id or not redirect_uri or not issuer_uri:
-        logger.error(f"Incomplete OAuth2 configuration for realm: {subdomain}")
+    if not issuer_uri or not client_id or not redirect_uri:
+        logger.error(f"Incomplete config for realm: {subdomain}")
         return JSONResponse(
             status_code=500,
-            content={"error": f"OAuth2 configuration incomplete for realm: {subdomain}"}
+            content={"error": "OAuth2 configuration incomplete"}
         )
     
-    # Get authorization endpoint from issuer
+    # Build authorization URL directly
+    scope = scope.replace(',', ' ').strip()
     auth_endpoint = f"{issuer_uri}/protocol/openid-connect/auth"
     
-    # Build authorization parameters with proper URL encoding
     params = {
         "response_type": "code",
         "client_id": client_id,
@@ -95,11 +94,10 @@ async def login(request: Request) -> RedirectResponse:
         "scope": scope,
     }
     
-    login_url = f"{auth_endpoint}?{urlencode(params)}"
+    auth_url = f"{auth_endpoint}?{urlencode(params)}"
+    logger.info(f"Redirecting to Keycloak auth endpoint for realm: {subdomain}")
     
-    logger.info(f"Redirecting to Keycloak login for realm: {subdomain}")
-    
-    return RedirectResponse(url=login_url, status_code=302)
+    return RedirectResponse(url=auth_url, status_code=302)
 
 
 @router.get("/home/{path_name:path}", tags=["frontend"])
@@ -214,33 +212,19 @@ async def frontend_assets(
 @router.get("/", tags=["root"])
 async def redirect_index_to_ui(request: Request) -> RedirectResponse:
     """
-    Redirect root to OAuth2 authorization
-    Extracts subdomain/tenant from hostname (works with both domains and IPs)
-    Matches Java BffApplication.redirectIndexToUi behavior
+    Redirect root to login
+    Simple redirect without realm extraction
     
     Returns:
-        Redirect response to OAuth2 authorization endpoint
+        Redirect response to /login endpoint
     """
-    # Get hostname from request (check X-Forwarded-Host first for proxy support)
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
-    hostname = host.split(':')[0]  # Remove port
-    
-    # Extract first part of hostname as subdomain/tenant identifier
-    # Works with: domains (tenant.example.com -> tenant), IPs (127.0.0.1 -> 127), localhost (-> localhost)
-    hostparts = hostname.split(".")
-    subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
-    
-    # Only use master entity as fallback if we couldn't extract any subdomain
-    if not subdomain or subdomain == "":
-        subdomain = settings.get_master_entity()
-    
-    # Get scheme (check X-Forwarded-Proto for proxy support)
+    host = request.headers.get("host", "localhost")
     scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
     
-    # Construct redirect URL - matches Java format
-    redirect_url = f"{scheme}://{host}/oauth2/authorization/{subdomain}"
+    # Redirect to /login which will handle realm resolution
+    redirect_url = f"{scheme}://{host}/login"
     
-    logger.info(f"Redirecting root request to: {redirect_url} (subdomain: {subdomain}, hostname: {hostname})")
+    logger.info(f"Redirecting root to login")
     
     return RedirectResponse(url=redirect_url, status_code=302)
 
