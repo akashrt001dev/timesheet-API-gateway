@@ -36,20 +36,21 @@ async def home_redirect(request: Request) -> RedirectResponse:
     Returns:
         Redirect response to frontend app
     """
+    host = request.headers.get("host", "localhost")
+    scheme = settings.get_scheme()
+    
     # Get frontend app URI
     react_uri = settings.get_react_uri()
     
     # Preserve query parameters (code, state, provider, etc.)
     query_string = request.url.query
     
-    # Build redirect URL with query parameters
+    # Redirect to frontend with all parameters
+    redirect_url = f"{react_uri}/home/" if query_string else f"{react_uri}/home/"
     if query_string:
-        redirect_url = f"{react_uri}/home/?{query_string}"
-    else:
-        redirect_url = f"{react_uri}/home/"
+        redirect_url += f"?{query_string}"
     
     logger.info(f"Redirecting home page request to: {redirect_url}")
-    logger.debug(f"Query parameters: {query_string}")
     
     return RedirectResponse(url=redirect_url, status_code=302)
 
