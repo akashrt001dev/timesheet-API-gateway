@@ -178,32 +178,23 @@ async def oauth2_callback(
     
     # Get post-login redirect path
     post_login_path = settings.get_post_login_redirect_path()
-    redirect_url = f"{scheme}://{host}{post_login_path}"
+    react_uri = settings.get_react_uri()
     
-    # In a real implementation, you would:
-    # 1. Exchange authorization code for tokens using client credentials
-    # 2. Store tokens in session/cookies
-    # 3. Create authenticated session
-    # 4. Redirect to post-login URL
+    # Build frontend redirect URL with authorization code and provider
+    # Frontend will use this to complete the OAuth2 token exchange
+    frontend_redirect = f"{react_uri}{post_login_path}"
+    
+    # Add query parameters
+    query_params = f"?code={code}&provider={provider}"
+    if state:
+        query_params += f"&state={state}"
+    
+    frontend_redirect_url = frontend_redirect + query_params
     
     logger.info(f"OAuth2 callback processed successfully for {provider}")
-    logger.debug(f"Redirecting to: {redirect_url}")
+    logger.debug(f"Redirecting to frontend: {frontend_redirect_url}")
     
-    # Build callback response with code and provider info
-    # Frontend will handle token exchange
-    callback_data = {
-        "status": "success",
-        "code": code,
-        "provider": provider,
-        "state": state,
-        "redirect_uri": redirect_url
-    }
-    
-    return JSONResponse(
-        status_code=200,
-        content=callback_data,
-        headers={"X-Code": code, "X-Provider": provider}
-    )
+    return RedirectResponse(url=frontend_redirect_url, status_code=302)
 
 
 @router.get("/login-options", response_model=List[LoginOptionDto], tags=["authentication"])
