@@ -207,8 +207,6 @@ async def frontend_assets(
         return error_response(f"Failed to fetch frontend: {str(e)}", 502)
 
 
-
-
 @router.get("/", tags=["root"])
 async def redirect_index_to_ui(request: Request) -> RedirectResponse:
     """
@@ -227,80 +225,6 @@ async def redirect_index_to_ui(request: Request) -> RedirectResponse:
     logger.info(f"Redirecting root to login")
     
     return RedirectResponse(url=redirect_url, status_code=302)
-
-
-@router.get("/oauth2/authorization/{realm}", tags=["authentication"])
-async def oauth2_authorization(
-    realm: str,
-    request: Request
-) -> RedirectResponse:
-    """
-    OAuth2 Authorization endpoint
-    Redirects to Keycloak authorization server
-    
-    Args:
-        realm: Keycloak realm name
-        request: Request object
-        
-    Returns:
-        Redirect response to Keycloak authorization endpoint
-    """
-    host = request.headers.get("host", "localhost")
-    scheme = settings.get_scheme()
-    
-    # Get OAuth2 registrations
-    registrations = settings.get_oauth2_registrations()
-    registration = registrations.get(realm, {})
-    
-    if not registration or not registration.get('issuer'):
-        logger.error(f"No OAuth2 registration found for realm: {realm}")
-        return JSONResponse(
-            status_code=404,
-            content={"error": f"No OAuth2 configuration for realm: {realm}"}
-        )
-    
-    # Get configuration from registration
-    issuer_uri = registration.get('issuer', '').rstrip('/')
-    client_id = registration.get('client_id')
-    redirect_uri = registration.get('redirect_uri')
-    scope = registration.get('scope', 'openid profile email')
-    
-    # Convert comma-separated scopes to space-separated for OAuth2
-    scope = scope.replace(',', ' ').strip()
-    
-    if not client_id or not redirect_uri or not issuer_uri:
-        logger.error(f"Incomplete OAuth2 configuration for realm: {realm}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"OAuth2 configuration incomplete for realm: {realm}"}
-        )
-    
-    # Get authorization endpoint from issuer
-    auth_endpoint = f"{issuer_uri}/protocol/openid-connect/auth"
-    
-    # Get authorization request parameters
-    query_params = request.query_params
-    
-    # Build authorization URL
-    authorization_url = (
-        f"{auth_endpoint}"
-        f"?client_id={client_id}"
-        f"&redirect_uri={redirect_uri}"
-        f"&response_type=code"
-        f"&scope={scope}"
-    )
-    
-    if query_params.get('state'):
-        authorization_url += f"&state={query_params.get('state')}"
-    
-    if query_params.get('nonce'):
-        authorization_url += f"&nonce={query_params.get('nonce')}"
-    
-    logger.info(f"Redirecting to OAuth2 authorization for realm: {realm}")
-    logger.debug(f"Authorization endpoint: {auth_endpoint}")
-    logger.debug(f"Client ID: {client_id}")
-    
-    return RedirectResponse(url=authorization_url, status_code=302)
 
 
 @router.get("/login/oauth2/code/{provider}", tags=["authentication"])
