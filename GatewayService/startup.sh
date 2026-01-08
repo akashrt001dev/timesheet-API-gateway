@@ -124,7 +124,7 @@ start_service() {
     nohup python3 -m uvicorn app.main:app --host "$HOST" --port "$PORT" --log-level info > "$LOG_FILE" 2> "$ERROR_LOG_FILE" &
     
     echo $! > "$PID_FILE"
-    sleep 2
+    sleep 3
     
     if ps -p $(cat "$PID_FILE") > /dev/null 2>&1; then
         echo -e "${GREEN}✓ Service started successfully (PID: $(cat $PID_FILE))${NC}"
@@ -133,6 +133,16 @@ start_service() {
         echo "Use './startup.sh status' to check status"
     else
         echo -e "${RED}✗ Failed to start service${NC}"
+        echo ""
+        echo "Error details:"
+        if [ -f "$ERROR_LOG_FILE" ]; then
+            cat "$ERROR_LOG_FILE"
+        fi
+        if [ -f "$LOG_FILE" ]; then
+            echo ""
+            echo "Recent logs:"
+            tail -20 "$LOG_FILE"
+        fi
         rm -f "$PID_FILE"
         exit 1
     fi
