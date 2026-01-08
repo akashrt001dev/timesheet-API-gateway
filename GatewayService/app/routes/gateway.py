@@ -189,11 +189,21 @@ async def oauth2_callback(
     logger.info(f"OAuth2 callback processed successfully for {provider}")
     logger.debug(f"Redirecting to: {redirect_url}")
     
-    # For now, redirect to home with code in query parameter
-    # The frontend or another service would handle token exchange
-    callback_redirect = f"{redirect_url}?code={code}&state={state}&provider={provider}" if state else f"{redirect_url}?code={code}&provider={provider}"
+    # Build callback response with code and provider info
+    # Frontend will handle token exchange
+    callback_data = {
+        "status": "success",
+        "code": code,
+        "provider": provider,
+        "state": state,
+        "redirect_uri": redirect_url
+    }
     
-    return RedirectResponse(url=callback_redirect, status_code=302)
+    return JSONResponse(
+        status_code=200,
+        content=callback_data,
+        headers={"X-Code": code, "X-Provider": provider}
+    )
 
 
 @router.get("/login-options", response_model=List[LoginOptionDto], tags=["authentication"])
