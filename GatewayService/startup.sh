@@ -64,10 +64,16 @@ build_service() {
     create_directories
     
     echo ""
+    echo "✓ Cleaning up conflicting system packages..."
+    # Remove system-installed packages that conflict with pip packages
+    pip uninstall -y pyOpenSSL cryptography urllib3 2>/dev/null || true
+    sudo apt-get remove -y python3-openssl python3-cryptography python3-urllib3 2>/dev/null || true
+    
+    echo ""
     echo "✓ Installing dependencies..."
-    # Remove system packages and reinstall clean versions to avoid OpenSSL conflicts
+    # Upgrade pip and install clean versions
     pip install --upgrade pip setuptools wheel
-    pip install --force-reinstall --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt
     echo -e "${GREEN}✓ Dependencies installed successfully${NC}"
     echo ""
     echo -e "${GREEN}✓ Build completed successfully!${NC}"

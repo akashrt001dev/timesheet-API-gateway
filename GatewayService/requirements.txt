@@ -13,7 +13,7 @@ python-dotenv==1.0.0
 
 # OAuth2 and JWT handling
 PyJWT==2.8.0
-cryptography==40.0.2
+cryptography==38.0.4
 httpx==0.25.2
 
 # YAML configuration
