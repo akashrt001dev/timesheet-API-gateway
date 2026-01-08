@@ -25,34 +25,89 @@ def extract_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
 
 @router.get("/home", tags=["frontend"])
 @router.get("/home/", tags=["frontend"])
-async def home_redirect(request: Request) -> RedirectResponse:
+async def home_redirect(
+    request: Request,
+    code: Optional[str] = None,
+    provider: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+    session_state: Optional[str] = None
+) -> RedirectResponse:
     """
-    Handle home page redirect with OAuth2 parameters
-    Redirects to React/Flutter app while preserving OAuth2 parameters
+    OAuth2 callback handler for home page redirect
+    Processes OAuth2 authentication and redirects to frontend
     
     Args:
         request: Request object
+        code: OAuth2 authorization code
+        provider: OAuth2 provider/realm name
+        state: State parameter for CSRF protection
+        error: Error code (if authentication failed)
+        error_description: Error description
+        session_state: Keycloak session state
         
     Returns:
         Redirect response to frontend app
     """
-    host = request.headers.get("host", "localhost")
-    scheme = settings.get_scheme()
+    # Get frontend URL from REACT_APP_URI
+    frontend_url = settings.get_react_uri()
     
-    # Get frontend app URI
-    react_uri = settings.get_react_uri()
+    # Handle OAuth2 errors
+    if error:
+        logger.error(f"OAuth2 error in callback: {error} - {error_description}")
+        error_redirect = f"{frontend_url}?error={error}&error_description={error_description}"
+        if state:
+            error_redirect += f"&state={state}"
+        return RedirectResponse(url=error_redirect, status_code=302)
     
-    # Preserve query parameters (code, state, provider, etc.)
-    query_string = request.url.query
+    # Validate required OAuth2 parameters
+    if not code or not provider:
+        logger.warning(f"Missing OAuth2 parameters - code: {bool(code)}, provider: {bool(provider)}")
+        error_redirect = f"{frontend_url}?error=invalid_callback&error_description=Missing+OAuth2+parameters"
+        return RedirectResponse(url=error_redirect, status_code=302)
     
-    # Redirect to frontend with all parameters
-    redirect_url = f"{react_uri}/home/" if query_string else f"{react_uri}/home/"
-    if query_string:
-        redirect_url += f"?{query_string}"
+    # Validate provider exists in configuration
+    registrations = settings.get_oauth2_registrations()
+    if provider not in registrations:
+        logger.error(f"Invalid OAuth2 provider: {provider}")
+        error_redirect = f"{frontend_url}?error=invalid_provider&error_description=Unknown+provider"
+        return RedirectResponse(url=error_redirect, status_code=302)
     
-    logger.info(f"Redirecting home page request to: {redirect_url}")
+    registration = registrations.get(provider, {})
+    if not registration.get('issuer'):
+        logger.error(f"Provider not configured: {provider}")
+        error_redirect = f"{frontend_url}?error=provider_not_configured"
+        return RedirectResponse(url=error_redirect, status_code=302)
     
-    return RedirectResponse(url=redirect_url, status_code=302)
+    logger.info(f"OAuth2 callback validated - provider: {provider}, code received: {code[:20]}...")
+    logger.debug(f"State: {state}, Session State: {session_state}")
+    
+    # Build redirect URL to frontend with OAuth2 parameters
+    redirect_url = f"{frontend_url}/home/"
+    query_params = f"?code={code}&provider={provider}"
+    
+    if state:
+        query_params += f"&state={state}"
+    
+    if session_state:
+        query_params += f"&session_state={session_state}"
+    
+    # TODO: Optional - Token exchange can be done here or on frontend
+    # In a full implementation, you could:
+    # 1. Exchange code for tokens using client credentials
+    # 2. Store tokens in secure HTTP-only cookies
+    # 3. Create authenticated session
+    # 4. Redirect to frontend with session established
+    
+    final_redirect = redirect_url + query_params
+    
+    logger.info(f"OAuth2 callback processed - redirecting to: {redirect_url}")
+    logger.debug(f"Final redirect URL: {final_redirect}")
+    
+    # HTTP 302 redirect for browser-based OAuth2 flow
+    # Works correctly behind Nginx and other reverse proxies
+    return RedirectResponse(url=final_redirect, status_code=302)
 
 
 @router.get("/", tags=["root"])
