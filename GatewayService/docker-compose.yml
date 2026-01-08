@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  gateway-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - APP_PROFILE=qa
+      - LOG_LEVEL=INFO
+      - DEBUG=false
+    volumes:
+      - ./config:/app/config
+      - ./app:/app/app
+      - ./.env:/app/.env
+    networks:
+      - timesmart-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health/live', timeout=5.0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+networks:
+  timesmart-network:
+    driver: bridge

@@ -1,0 +1,248 @@
+scheme: https
+keycloak-port: 443
+gateway-uri: ${scheme}://localhost:${server.port}
+greetings-api-uri: ${scheme}://localhost:6443/greetings
+react-uri: https://app.timesmart.io
+flutter-uri: https://app.timesmart.io
+server:
+  port: 8000
+  ssl:
+    enabled: false
+eureka:
+  instance:
+    prefer-ip-address: true
+  client:
+    service-url:
+      default-zone: http://localhost:8761/eureka/
+    fetch-registry: true
+    register-with-eureka: true    
+app:
+  master-entity:
+    name: timesmart-master
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  security:
+    oauth2:
+      client:
+        provider:
+          keycloak-timesmart-master:
+            issuer-uri: https://idm.timesmart.io/realms/timesmart-master
+          keycloak-zukerberghospital:
+            issuer-uri: https://idm.timesmart.io/realms/zukerberghospital
+          keycloak-hopkins:
+            issuer-uri: https://idm.timesmart.io/realms/hopkins
+          keycloak-orthopedicsabbi:
+            issuer-uri: https://idm.timesmart.io/realms/orthopedicsabbi
+          keycloak-smmc-io-prod:
+            issuer-uri: https://idm.timesmart.io/realms/smmc-io-prod
+          keycloak-tenet-io-prod:
+            issuer-uri: https://idm.timesmart.io/realms/tenet-io-prod            
+            
+        registration:
+          timesmart-master:
+            authorization-grant-type: authorization_code
+            client-name: Keycloak
+            client-id: spring-addons-confidential
+            client-secret: aQe4uXvyaIF5AMHlXNhmh38Fox3L396H
+            provider: keycloak-timesmart-master
+            scope: openid,profile,email,offline_access,roles
+            redirect-uri: https://timesmart.io/login/oauth2/code/timesmart-master
+          zukerberghospital:
+            authorization-grant-type: authorization_code
+            client-name: Keycloak
+            client-id: spring-addons-confidential
+            client-secret: VQZZFw30T7pzuZdiwLdIm2uQiHTo5Bvy
+            provider: keycloak-zukerberghospital
+            scope: openid,profile,email,offline_access,roles
+            redirect-uri: https://zukerberghospital.timesmart.io/login/oauth2/code/zukerberghospital
+          hopkins:
+            authorization-grant-type: authorization_code
+            client-name: Keycloak
+            client-id: spring-addons-confidential
+            client-secret: EDsJhzyjF5NtPV2m51G660ozLKhFVZ0t
+            provider: keycloak-hopkins
+            scope: openid,profile,email,offline_access,roles
+            redirect-uri: https://hopkins.timesmart.io/login/oauth2/code/hopkins
+          orthopedicsabbi:
+            authorization-grant-type: authorization_code
+            client-name: Keycloak
+            client-id: spring-addons-confidential
+            client-secret: 3HxqyaT1Of6HZoF0q17If9ISIoEqVstD
+            provider: keycloak-orthopedicsabbi
+            scope: openid,profile,email,offline_access,roles
+            redirect-uri: https://orthopedicsabbi.timesmart.io/login/oauth2/code/orthopedicsabbi
+          smmc-io-prod:
+            authorization-grant-type: authorization_code
+            client-name: Keycloak
+            client-id: spring-addons-confidential
+            client-secret: MJ4a5mNRhNfrOSS15dyaXXBfo5emdqdi
+            provider: keycloak-smmc-io-prod
+            scope: openid,profile,email,offline_access,roles
+            redirect-uri: https://smmc-io-prod.timesmart.io/login/oauth2/code/smmc-io-prod
+          tenet-io-prod:
+            authorization-grant-type: authorization_code
+            client-name: Keycloak
+            client-id: spring-addons-confidential
+            client-secret: k50K09Rorb9AMMkj6YoUkUq00LhO24Ng
+            provider: keycloak-tenet-io-prod
+            scope: openid,profile,email,offline_access,roles
+            redirect-uri: https://tenet-io-prod.timesmart.io/login/oauth2/code/tenet-io-prod
+            
+  cloud:
+    loadbalancer:
+      ribbon:
+        enabled: false  
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true    
+      default-filters:
+      - TokenRelay=
+      - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin
+      - SaveSession
+      routes:
+      - id: greetings
+        uri: ${greetings-api-uri}
+        predicates:
+        - Path=/greetings/**
+      - id: app
+        uri: ${react-uri}
+        predicates:
+        - Path=/app/**
+      - id: home
+        uri: ${flutter-uri}
+        predicates:
+        - Path=/home/**
+     
+      - id: user-management-service
+        uri: lb://user-management-service
+        predicates:
+          - Path=/auth/**, /user/**, /roles/**
+        filters:
+        - RewritePath=/auth/(?<path>.*), /$\{path},/user/(?<path>.*), /roles/(?<path>.*)
+
+      - id: user-management-service-api
+        uri: lb://user-management-service
+        predicates:
+          - Path=/api/user-management-service/** 
+        filters:
+          - RewritePath=/api/user-management-service/auth/(?<path>.*),/auth/$\{path}
+          - RewritePath=/api/user-management-service/user/(?<path>.*), /user/${path}
+          - RewritePath=/api/user-management-service/roles/(?<path>.*), /roles/${path}      
+      - id: contract-managment-service
+        uri: lb://contract-managment-service
+        predicates:
+          - Path=/contracts/**
+        filters:
+        - RewritePath=/contracts/(?<path>.*), /$\{path}
+      - id: contract-managment-service-api
+        uri: lb://contract-managment-service
+        predicates:
+          - Path=/api/contract-managment-service/**
+      - id: entity-service
+        uri: lb://entity-service
+        predicates:
+          - Path=/entity/**,/entityID/**
+        filters:
+        - RewritePath=/entity/(?<path>.*), /$\{path}
+      - id: entity-service-api
+        uri: lb://entity-service
+        predicates:
+          - Path=/api/entity-service/**
+
+      - id: timesheet-management-service
+        uri: lb://timesheet-management-service
+        predicates:
+          - Path=/timesheet/**, /activity/**
+        filters:
+        - RewritePath=/timesheet/(?<path>.*), /$\{path},/activity/(?<path>.*), /$\{path}
+      - id: timesheet-management-service-api
+        uri: lb://timesheet-management-service
+        predicates:
+          - Path=/api/timesheet-management-service/**
+      - id: notification-service
+        uri: lb://notification-service
+        predicates:
+          - Path=/emailtemplate/**
+        filters:
+          - RewritePath=/emailtemplate/(?<path>.*), /$\{path}
+          - RemoveRequestHeader=Cookie,Set-Cookie       
+          
+com:
+  c4-soft:
+    springaddons:
+      security:
+        issuers:
+        - location: https://idm.timesmart.io/realms/timesmart-master
+          username-claim: preferred_username
+          authorities:
+          - path: $.realm_access.roles
+          - path: $.resource_access.*.roles
+        - location: https://idm.timesmart.io/realms/zukerberghospital
+          username-claim: preferred_username
+          authorities:
+          - path: $.realm_access.roles
+          - path: $.resource_access.*.roles
+        - location: https://idm.timesmart.io/realms/hopkins
+          username-claim: preferred_username
+          authorities:
+          - path: $.realm_access.roles
+          - path: $.resource_access.*.roles
+        - location: https://idm.timesmart.io/realms/orthopedicsabbi
+          username-claim: preferred_username
+          authorities:
+          - path: $.realm_access.roles
+          - path: $.resource_access.*.roles
+        - location: https://idm.timesmart.io/realms/smmc-io-prod
+          username-claim: preferred_username
+          authorities:
+          - path: $.realm_access.roles
+          - path: $.resource_access.*.roles
+        - location: https://idm.timesmart.io/realms/tenet-io-prod
+          username-claim: preferred_username
+          authorities:
+          - path: $.realm_access.roles
+          - path: $.resource_access.*.roles
+          
+        client:
+          security-matchers: /**
+          permit-all:
+          - /login/**
+          - /oauth2/**
+          - /
+          - /login-options
+          - "/me"
+          - /ui/**
+          - /app/**          
+          - /v3/api-docs/**
+          - /user-management-service/user/ssoid/**
+          - /entity-service/entityID
+          - /entity-service/entity/logo
+          - /entity-service/entity/allEntity          
+          csrf: cookie-accessible-from-js
+          login-path: /
+          post-login-redirect-path: /home/
+          post-logout-redirect-path: /home
+          back-channel-logout-enabled: true
+            
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+logging:
+  level:
+    root: ERROR
+    org.springframework.security: DEBUG

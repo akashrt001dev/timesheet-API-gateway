@@ -1,0 +1,41 @@
+# FastAPI Gateway Service - Python Requirements
+# Core FastAPI framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Web framework and async support
+starlette==0.27.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Configuration Management
+python-dotenv==1.0.0
+
+# OAuth2 and JWT handling
+PyJWT==2.8.0
+cryptography==41.0.7
+httpx==0.25.2
+
+# YAML configuration
+PyYAML==6.0.1
+
+# HTTP and networking
+requests==2.31.0
+aiohttp==3.9.1
+
+# Security
+python-jose==3.3.0
+passlib==1.7.4
+
+# Utilities
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+
+# Logging and monitoring
+python-json-logger==2.0.7
+
+# Environment variables
+python-dotenv==1.0.0

@@ -1,0 +1,42 @@
+# FastAPI Gateway Service - Python gitignore
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Distribution
+build/
+dist/
+*.egg-info/
+
+# Dependencies
+pip-log.txt
+pip-delete-this-directory.txt
+
+# OS
+Thumbs.db
+.DS_Store
