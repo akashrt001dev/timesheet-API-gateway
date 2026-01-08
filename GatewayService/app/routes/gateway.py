@@ -23,6 +23,38 @@ def extract_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     return None
 
 
+@router.get("/home", tags=["frontend"])
+@router.get("/home/", tags=["frontend"])
+async def home_redirect(request: Request) -> RedirectResponse:
+    """
+    Handle home page redirect with OAuth2 parameters
+    Redirects to React/Flutter app while preserving OAuth2 parameters
+    
+    Args:
+        request: Request object
+        
+    Returns:
+        Redirect response to frontend app
+    """
+    host = request.headers.get("host", "localhost")
+    scheme = settings.get_scheme()
+    
+    # Get frontend app URI
+    react_uri = settings.get_react_uri()
+    
+    # Preserve query parameters (code, state, provider, etc.)
+    query_string = request.url.query
+    
+    # Redirect to frontend with all parameters
+    redirect_url = f"{react_uri}/home/" if query_string else f"{react_uri}/home/"
+    if query_string:
+        redirect_url += f"?{query_string}"
+    
+    logger.info(f"Redirecting home page request to: {redirect_url}")
+    
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
 @router.get("/", tags=["root"])
 async def redirect_index_to_ui(request: Request) -> RedirectResponse:
     """
