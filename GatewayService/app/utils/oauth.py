@@ -3,15 +3,12 @@ OAuth2 and JWT utilities for token processing
 """
 import json
 import base64
-import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import jwt
 from jwt import PyJWTError
 import httpx
 from app.models.schemas import TokenClaims, UserDto
-
-logger = logging.getLogger(__name__)
 
 
 class TokenProcessor:
@@ -118,57 +115,6 @@ class TokenProcessor:
     def get_id_token_value(token: str) -> str:
         """Get ID token value (the token itself)"""
         return token
-    
-    @staticmethod
-    async def exchange_authorization_code(
-        code: str,
-        issuer_uri: str,
-        client_id: str,
-        client_secret: str,
-        redirect_uri: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Exchange OAuth2 authorization code for tokens
-        
-        Args:
-            code: Authorization code from Keycloak
-            issuer_uri: Keycloak issuer URI (e.g., https://keycloak.example.com/auth/realms/master)
-            client_id: OAuth2 client ID
-            client_secret: OAuth2 client secret
-            redirect_uri: Redirect URI used in authorization request
-            
-        Returns:
-            Token response dict with 'access_token', 'refresh_token', etc. or None if failed
-        """
-        try:
-            token_url = f"{issuer_uri.rstrip('/')}/protocol/openid-connect/token"
-            
-            logger.info(f"Exchanging authorization code for tokens at {token_url}")
-            
-            async with httpx.AsyncClient(verify=False) as client:
-                response = await client.post(
-                    token_url,
-                    data={
-                        'grant_type': 'authorization_code',
-                        'code': code,
-                        'client_id': client_id,
-                        'client_secret': client_secret,
-                        'redirect_uri': redirect_uri
-                    },
-                    timeout=10.0
-                )
-            
-            if response.status_code != 200:
-                logger.error(f"Token exchange failed: {response.status_code} - {response.text}")
-                return None
-            
-            token_response = response.json()
-            logger.info(f"Successfully exchanged authorization code for tokens")
-            return token_response
-            
-        except Exception as e:
-            logger.error(f"Error exchanging authorization code: {type(e).__name__}: {str(e)}")
-            return None
 
 
 class MultiTenantResolver:
