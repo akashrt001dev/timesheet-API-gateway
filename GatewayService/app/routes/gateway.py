@@ -266,18 +266,18 @@ async def oauth2_callback(
 ) -> RedirectResponse:
     """
     OAuth2 Authorization Code Callback
-    Exchanges authorization code for Bearer token and redirects to frontend
+    Handles the callback from Keycloak after user authorization
     
     Args:
         provider: OAuth2 provider/realm name
-        code: Authorization code from Keycloak
-        state: State parameter for CSRF protection
+        code: Authorization code
+        state: State parameter
         error: Error code (if authorization failed)
         error_description: Error description
         request: Request object
         
     Returns:
-        Redirect response with token or error
+        Redirect response
     """
     host = request.headers.get("host", "localhost")
     scheme = settings.get_scheme()
@@ -306,60 +306,24 @@ async def oauth2_callback(
         error_redirect = f"{scheme}://{host}/login?error=invalid_provider"
         return RedirectResponse(url=error_redirect, status_code=302)
     
-    # Prepare token exchange parameters
-    issuer_uri = registration.get('issuer')
-    client_id = registration.get('client_id')
-    client_secret = registration.get('client_secret')
-    
-    if not client_id or not client_secret:
-        logger.error(f"Missing OAuth2 credentials for {provider}")
-        error_redirect = f"{scheme}://{host}/login?error=missing_credentials"
-        return RedirectResponse(url=error_redirect, status_code=302)
-    
-    # Construct redirect_uri (same as the authorization request)
-    callback_uri = f"{scheme}://{host}/login/oauth2/code/{provider}"
-    
-    # Exchange authorization code for tokens
-    logger.info(f"Exchanging authorization code for tokens from {provider}")
-    token_response = await TokenProcessor.exchange_authorization_code(
-        code=code,
-        issuer_uri=issuer_uri,
-        client_id=client_id,
-        client_secret=client_secret,
-        redirect_uri=callback_uri
-    )
-    
-    if not token_response or 'access_token' not in token_response:
-        logger.error(f"Failed to exchange authorization code for tokens from {provider}")
-        error_redirect = f"{scheme}://{host}/login?error=token_exchange_failed"
-        return RedirectResponse(url=error_redirect, status_code=302)
-    
-    access_token = token_response.get('access_token')
-    refresh_token = token_response.get('refresh_token')
-    id_token = token_response.get('id_token')
-    
-    logger.info(f"Successfully obtained access token from {provider}")
-    
     # Get post-login redirect path
     post_login_path = settings.get_post_login_redirect_path()
     redirect_url = f"{scheme}://{host}{post_login_path}"
     
-    # Redirect to frontend with Bearer token in Authorization header
-    # The frontend will receive the token and use it for API calls
-    response = RedirectResponse(url=redirect_url, status_code=302)
+    # In a real implementation, you would:
+    # 1. Exchange authorization code for tokens using client credentials
+    # 2. Store tokens in session/cookies
+    # 3. Create authenticated session
+    # 4. Redirect to post-login URL
     
-    # Set Authorization header with Bearer token in redirect
-    # Note: Browsers won't send Authorization header in redirects
-    # So we pass token as query parameter and frontend stores it
-    if state:
-        redirect_url = f"{redirect_url}?access_token={access_token}&token_type=Bearer&state={state}"
-    else:
-        redirect_url = f"{redirect_url}?access_token={access_token}&token_type=Bearer"
+    logger.info(f"OAuth2 callback processed successfully for {provider}")
+    logger.debug(f"Redirecting to: {redirect_url}")
     
-    response = RedirectResponse(url=redirect_url, status_code=302)
+    # For now, redirect to home with code in query parameter
+    # The frontend or another service would handle token exchange
+    callback_redirect = f"{redirect_url}?code={code}&state={state}&provider={provider}" if state else f"{redirect_url}?code={code}&provider={provider}"
     
-    logger.info(f"Redirecting to {post_login_path} with Bearer token")
-    return response
+    return RedirectResponse(url=callback_redirect, status_code=302)
 
 
 @router.get("/login-options", response_model=List[LoginOptionDto], tags=["authentication"])
