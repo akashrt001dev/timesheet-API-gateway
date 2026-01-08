@@ -62,29 +62,10 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
     # Always remove host - HTTP client will set it correctly
     headers.pop('host', None)
     
-    # =====================================================
-    # PUBLIC ENDPOINT HANDLING - NO AUTH REQUIRED
-    # =====================================================
-    # List of public paths that don't require Authorization header
-    PUBLIC_ENDPOINTS = [
-        '/auth/login',
-        '/auth/register',
-        '/auth/forgot-password',
-        '/auth/reset-password',
-        '/auth/verify-email',
-        '/health',
-        '/metrics'
-    ]
-    
-    # Check if this is a public endpoint and no Authorization header is present
-    is_public_endpoint = any(request_path.startswith(ep) or request_path.endswith(ep) for ep in PUBLIC_ENDPOINTS)
-    has_auth_header = 'authorization' in headers
-    
-    if is_public_endpoint and not has_auth_header:
-        # Add a dummy/guest authorization token for public endpoints
-        # This allows backends with global auth filters to process public endpoints
-        headers['authorization'] = 'Bearer guest'
-        logger.info(f"Added guest Authorization for public endpoint: {request_path}")
+    # Keep Authorization header as-is if present
+    # The backend will validate the token
+    if 'authorization' in headers:
+        logger.debug(f"Authorization header present, will be forwarded to backend")
     
     # =====================================================
     # ADD FORWARDED HEADERS (HTTPS COMPATIBILITY FIX)
