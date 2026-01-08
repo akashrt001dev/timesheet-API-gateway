@@ -33,10 +33,9 @@ async def home_redirect(
     error: Optional[str] = None,
     error_description: Optional[str] = None,
     session_state: Optional[str] = None
-) -> Response:
+) -> RedirectResponse:
     """
-    OAuth2 callback handler - serves home page with OAuth2 parameters
-    Passes auth code to frontend via HTML response
+    OAuth2 callback handler - redirects to frontend with OAuth2 parameters
     
     Args:
         request: Request object
@@ -48,76 +47,37 @@ async def home_redirect(
         session_state: Keycloak session state
         
     Returns:
-        HTML response with OAuth2 parameters embedded for frontend
+        Redirect response to frontend app
     """
-    # Validate provider exists in configuration
-    if provider:
-        registrations = settings.get_oauth2_registrations()
-        if provider not in registrations:
-            logger.error(f"Invalid OAuth2 provider: {provider}")
-            error_msg = "Invalid provider"
-        else:
-            registration = registrations.get(provider, {})
-            if not registration.get('issuer'):
-                logger.error(f"Provider not configured: {provider}")
-                error_msg = "Provider not configured"
-            else:
-                error_msg = None
-    else:
-        error_msg = None
+    # Get frontend URL
+    frontend_url = settings.get_react_uri()
     
-    # Build OAuth2 parameters JSON for frontend
-    oauth_params = {}
-    if code:
-        oauth_params['code'] = code
-    if provider:
-        oauth_params['provider'] = provider
-    if state:
-        oauth_params['state'] = state
-    if session_state:
-        oauth_params['session_state'] = session_state
+    # Build query parameters for frontend
+    query_params = []
+    
     if error:
-        oauth_params['error'] = error
-        oauth_params['error_description'] = error_description or ""
+        query_params.append(f"error={error}")
+        if error_description:
+            query_params.append(f"error_description={error_description}")
+    else:
+        if code:
+            query_params.append(f"code={code}")
+        if provider:
+            query_params.append(f"provider={provider}")
+        if state:
+            query_params.append(f"state={state}")
+        if session_state:
+            query_params.append(f"session_state={session_state}")
     
-    oauth_json = json.dumps(oauth_params)
+    # Build redirect URL
+    redirect_url = f"{frontend_url}/home/"
+    if query_params:
+        redirect_url += "?" + "&".join(query_params)
     
-    logger.info(f"OAuth2 home page - provider: {provider}, code: {code[:20] if code else 'None'}...")
+    logger.info(f"OAuth2 callback - redirecting to frontend: {frontend_url}")
+    logger.debug(f"OAuth2 params - provider: {provider}, code: {code[:20] if code else 'None'}...")
     
-    # Return HTML that passes OAuth parameters to frontend app
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Loading...</title>
-        <meta charset="utf-8">
-        <script>
-            // Store OAuth2 parameters in sessionStorage for frontend to access
-            window.oauth2Params = {oauth_json};
-            console.log('OAuth2 parameters received:', window.oauth2Params);
-        </script>
-    </head>
-    <body>
-        <div id="app"></div>
-        <script>
-            // Frontend app initialization script
-            // The frontend app will check for oauth2Params and complete the auth flow
-            document.addEventListener('DOMContentLoaded', function() {{
-                // Frontend React/Vue/Angular app should load here
-                console.log('Home page loaded with OAuth2 parameters');
-                // You can load your frontend app here or redirect to it
-                // window.location.href = '/app/index.html';
-            }});
-        </script>
-    </body>
-    </html>
-    """
-    
-    return Response(
-        content=html_content,
-        status_code=200,
-        media_type="text/html; charset=utf-8"
-    )
+    return RedirectResponse(url=redirect_url, status_code=302)
 
 
 @router.get("/", tags=["root"])
