@@ -116,37 +116,55 @@ async def home_redirect(
 
 
 @router.get("/", tags=["root"])
-async def redirect_index_to_ui(request: Request) -> RedirectResponse:
+async def redirect_index_to_ui(request: Request) -> Response:
     """
-    Redirect root to OAuth2 authorization
-    Extracts subdomain/tenant from hostname (works with both domains and IPs)
-    Matches Java BffApplication.redirectIndexToUi behavior
+    Serve the root endpoint with OAuth2 support
+    Directly serves frontend HTML instead of redirecting
+    Frontend will handle OAuth2 authorization flow via /login-options
     
     Returns:
-        Redirect response to OAuth2 authorization endpoint
+        HTML response with frontend content
     """
-    # Get hostname from request (check X-Forwarded-Host first for proxy support)
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
-    hostname = host.split(':')[0]  # Remove port
+    import httpx
     
-    # Extract first part of hostname as subdomain/tenant identifier
-    # Works with: domains (tenant.example.com -> tenant), IPs (127.0.0.1 -> 127), localhost (-> localhost)
-    hostparts = hostname.split(".")
-    subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
+    try:
+        # Get frontend URL
+        frontend_url = settings.get_react_uri()
+        
+        # Fetch the frontend HTML directly
+        async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=30.0) as client:
+            response = await client.get(f"{frontend_url}/")
+        
+        if response.status_code == 200:
+            logger.info(f"Serving frontend from {frontend_url}")
+            return Response(
+                content=response.text,
+                status_code=200,
+                media_type="text/html; charset=utf-8"
+            )
+        else:
+            logger.warning(f"Frontend returned {response.status_code}, redirecting to OAuth")
+            # Fallback to OAuth if frontend unavailable
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
+            hostname = host.split(':')[0]
+            hostparts = hostname.split(".")
+            subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
+            
+            scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
+            redirect_url = f"{scheme}://{host}/oauth2/authorization/{subdomain}"
+            return RedirectResponse(url=redirect_url, status_code=302)
     
-    # Only use master entity as fallback if we couldn't extract any subdomain
-    if not subdomain or subdomain == "":
-        subdomain = settings.get_master_entity()
-    
-    # Get scheme (check X-Forwarded-Proto for proxy support)
-    scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
-    
-    # Construct redirect URL - matches Java format
-    redirect_url = f"{scheme}://{host}/oauth2/authorization/{subdomain}"
-    
-    logger.info(f"Redirecting root request to: {redirect_url} (subdomain: {subdomain}, hostname: {hostname})")
-    
-    return RedirectResponse(url=redirect_url, status_code=302)
+    except Exception as e:
+        logger.error(f"Error serving frontend: {str(e)}")
+        # Fallback to OAuth authorization
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
+        hostname = host.split(':')[0]
+        hostparts = hostname.split(".")
+        subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
+        
+        scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
+        redirect_url = f"{scheme}://{host}/oauth2/authorization/{subdomain}"
+        return RedirectResponse(url=redirect_url, status_code=302)
 
 
 @router.get("/oauth2/authorization/{realm}", tags=["authentication"])
@@ -536,3 +554,75 @@ async def liveness() -> Dict[str, str]:
 async def readiness() -> Dict[str, str]:
     """Kubernetes readiness probe"""
     return {"status": "UP"}
+
+
+@router.get("/{path:path}", tags=["frontend"])
+async def serve_frontend_assets(path: str, request: Request) -> Response:
+    """
+    Serve frontend assets and fallback to index.html for SPA routing
+    Proxies requests to REACT_APP_URI and handles missing assets gracefully
+    
+    Args:
+        path: Requested path (e.g., 'assets/main.dart.js', 'FontManifest.json')
+        request: Request object
+        
+    Returns:
+        Proxied response from frontend or index.html fallback
+    """
+    import httpx
+    
+    try:
+        frontend_url = settings.get_react_uri()
+        request_url = f"{frontend_url}/{path}"
+        
+        # Fetch the requested asset
+        async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=30.0) as client:
+            response = await client.get(request_url)
+        
+        # If 404 and not an API request, try index.html for SPA routing
+        if response.status_code == 404 and not path.startswith('api/'):
+            logger.debug(f"Asset not found: {path}, serving index.html for SPA routing")
+            response = await client.get(f"{frontend_url}/index.html")
+        
+        if response.status_code == 200:
+            # Determine content type based on path
+            content_type = "text/html; charset=utf-8"
+            if path.endswith('.js'):
+                content_type = "application/javascript; charset=utf-8"
+            elif path.endswith('.css'):
+                content_type = "text/css; charset=utf-8"
+            elif path.endswith('.json'):
+                content_type = "application/json"
+            elif path.endswith('.wasm'):
+                content_type = "application/wasm"
+            elif path.endswith('.gif'):
+                content_type = "image/gif"
+            elif path.endswith('.png'):
+                content_type = "image/png"
+            elif path.endswith('.jpg') or path.endswith('.jpeg'):
+                content_type = "image/jpeg"
+            elif path.endswith('.svg'):
+                content_type = "image/svg+xml"
+            elif path.endswith('.ico'):
+                content_type = "image/x-icon"
+            
+            return Response(
+                content=response.text if content_type.startswith('text') or content_type == "application/json" else response.content,
+                status_code=200,
+                media_type=content_type
+            )
+        else:
+            logger.warning(f"Frontend returned {response.status_code} for {path}")
+            return Response(
+                content=f"Asset not found: {path}",
+                status_code=404,
+                media_type="text/plain"
+            )
+    
+    except Exception as e:
+        logger.error(f"Error serving asset {path}: {str(e)}")
+        return Response(
+            content=f"Error loading asset: {str(e)}",
+            status_code=502,
+            media_type="text/plain"
+        )
