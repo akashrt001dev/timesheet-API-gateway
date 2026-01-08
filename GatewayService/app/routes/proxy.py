@@ -149,6 +149,7 @@ def apply_gateway_filters(
 def get_service_url(service_name: str) -> Optional[str]:
     """
     Get service URL with proper validation
+    ALWAYS returns HTTP URL for backend services (they run on HTTP internally)
     
     Args:
         service_name: Name of the microservice (e.g., 'user-management-service')
@@ -168,8 +169,10 @@ def get_service_url(service_name: str) -> Optional[str]:
             )
             return None
         
+        # IMPORTANT: Always use HTTP for internal backend services
+        # Backend services run on HTTP even though gateway may receive HTTPS
         service_url = f"http://{service_host}:{service_port}"
-        logger.info(f"Service URL for '{service_name}': {service_url}")
+        logger.info(f"Service URL for '{service_name}': {service_url} (HTTP - internal)")
         return service_url
         
     except Exception as e:
@@ -221,13 +224,18 @@ async def proxy_api_request(
         
         full_target_url = f"{service_url.rstrip('/')}{remaining_path}"
         
+        # Verify service URL is HTTP (backend services run on HTTP internally)
+        if not full_target_url.startswith('http://'):
+            logger.warning(f"Service URL is not HTTP: {full_target_url}. Converting to HTTP...")
+            full_target_url = full_target_url.replace('https://', 'http://')
+        
         # Prepare headers
         headers = prepare_request_headers(request)
         
         # Get request body
         body = await request.body() if request.method in ["POST", "PUT", "PATCH"] else None
         
-        logger.info(f"Forwarding request: {request.method} {full_target_url}")
+        logger.info(f"Forwarding request to backend (HTTP only): {request.method} {full_target_url}")
         
         # Forward request with error handling
         try:
@@ -303,6 +311,13 @@ async def proxy_api_request(
     
     # Construct full target URL
     full_target_url = f"{target_url.rstrip('/')}{rewritten_path}"
+    
+    # Ensure load-balanced services use HTTP (backend services run on HTTP internally)
+    if target_uri.startswith('lb://'):
+        if not full_target_url.startswith('http://'):
+            logger.warning(f"Load-balanced service URL is not HTTP: {full_target_url}. Converting to HTTP...")
+            full_target_url = full_target_url.replace('https://', 'http://')
+        logger.info(f"Forwarding to load-balanced service (HTTP only): {request.method} {full_target_url}")
     
     # Prepare headers (apply RemoveRequestHeader filters)
     headers = prepare_request_headers(request, headers_to_remove)
