@@ -65,7 +65,9 @@ build_service() {
     
     echo ""
     echo "✓ Installing dependencies..."
-    pip install -q -r requirements.txt
+    # Remove system packages and reinstall clean versions to avoid OpenSSL conflicts
+    pip install --upgrade pip setuptools wheel
+    pip install --force-reinstall --no-cache-dir -r requirements.txt
     echo -e "${GREEN}✓ Dependencies installed successfully${NC}"
     echo ""
     echo -e "${GREEN}✓ Build completed successfully!${NC}"
