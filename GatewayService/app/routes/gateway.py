@@ -33,9 +33,10 @@ async def home_redirect(
     error: Optional[str] = None,
     error_description: Optional[str] = None,
     session_state: Optional[str] = None
-) -> RedirectResponse:
+) -> Response:
     """
-    OAuth2 callback handler - redirects to frontend with OAuth2 parameters
+    OAuth2 callback handler - serves frontend with OAuth2 parameters
+    Proxies frontend from REACT_APP_URI and injects OAuth2 parameters
     
     Args:
         request: Request object
@@ -47,37 +48,71 @@ async def home_redirect(
         session_state: Keycloak session state
         
     Returns:
-        Redirect response to frontend app
+        Frontend HTML response with OAuth2 parameters available
     """
+    import httpx
+    
     # Get frontend URL
     frontend_url = settings.get_react_uri()
     
-    # Build query parameters for frontend
-    query_params = []
+    # Fetch frontend content from REACT_APP_URI
+    frontend_home_url = f"{frontend_url}/home/"
     
-    if error:
-        query_params.append(f"error={error}")
-        if error_description:
-            query_params.append(f"error_description={error_description}")
-    else:
+    try:
+        # Fetch the frontend HTML
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.get(frontend_home_url)
+        
+        html_content = response.text
+        
+        # Build OAuth2 parameters JSON
+        oauth_params = {}
         if code:
-            query_params.append(f"code={code}")
+            oauth_params['code'] = code
         if provider:
-            query_params.append(f"provider={provider}")
+            oauth_params['provider'] = provider
         if state:
-            query_params.append(f"state={state}")
+            oauth_params['state'] = state
         if session_state:
-            query_params.append(f"session_state={session_state}")
+            oauth_params['session_state'] = session_state
+        if error:
+            oauth_params['error'] = error
+            oauth_params['error_description'] = error_description or ""
+        
+        oauth_json = json.dumps(oauth_params)
+        
+        # Inject OAuth2 parameters into the HTML
+        inject_script = f"""
+        <script>
+            // OAuth2 parameters from gateway
+            window.oauth2Params = {oauth_json};
+            console.log('OAuth2 parameters available:', window.oauth2Params);
+        </script>
+        """
+        
+        # Insert script before closing </head> tag if it exists, otherwise before </body>
+        if '</head>' in html_content:
+            html_content = html_content.replace('</head>', f'{inject_script}</head>')
+        elif '</body>' in html_content:
+            html_content = html_content.replace('</body>', f'{inject_script}</body>')
+        else:
+            html_content += inject_script
+        
+        logger.info(f"OAuth2 home page - provider: {provider}, serving frontend from {frontend_url}")
+        
+        return Response(
+            content=html_content,
+            status_code=200,
+            media_type="text/html; charset=utf-8"
+        )
     
-    # Build redirect URL
-    redirect_url = f"{frontend_url}/home/"
-    if query_params:
-        redirect_url += "?" + "&".join(query_params)
-    
-    logger.info(f"OAuth2 callback - redirecting to frontend: {frontend_url}")
-    logger.debug(f"OAuth2 params - provider: {provider}, code: {code[:20] if code else 'None'}...")
-    
-    return RedirectResponse(url=redirect_url, status_code=302)
+    except Exception as e:
+        logger.error(f"Error fetching frontend from {frontend_home_url}: {str(e)}")
+        return Response(
+            content=f"Error loading frontend: {str(e)}",
+            status_code=502,
+            media_type="text/plain"
+        )
 
 
 @router.get("/", tags=["root"])
