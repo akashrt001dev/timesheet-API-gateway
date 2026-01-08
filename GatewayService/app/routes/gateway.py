@@ -85,7 +85,10 @@ async def oauth2_authorization(
     issuer_uri = registration.get('issuer', '').rstrip('/')
     client_id = registration.get('client_id')
     redirect_uri = registration.get('redirect_uri')
-    scope = registration.get('scope', 'openid,profile,email')
+    scope = registration.get('scope', 'openid profile email')
+    
+    # Convert comma-separated scopes to space-separated for OAuth2
+    scope = scope.replace(',', ' ').strip()
     
     if not client_id or not redirect_uri or not issuer_uri:
         logger.error(f"Incomplete OAuth2 configuration for realm: {realm}")
@@ -120,6 +123,77 @@ async def oauth2_authorization(
     logger.debug(f"Client ID: {client_id}")
     
     return RedirectResponse(url=authorization_url, status_code=302)
+
+
+@router.get("/login/oauth2/code/{provider}", tags=["authentication"])
+async def oauth2_callback(
+    provider: str,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+    request: Request = None
+) -> RedirectResponse:
+    """
+    OAuth2 Authorization Code Callback
+    Handles the callback from Keycloak after user authorization
+    
+    Args:
+        provider: OAuth2 provider/realm name
+        code: Authorization code
+        state: State parameter
+        error: Error code (if authorization failed)
+        error_description: Error description
+        request: Request object
+        
+    Returns:
+        Redirect response
+    """
+    host = request.headers.get("host", "localhost")
+    scheme = settings.get_scheme()
+    
+    # Handle authorization errors
+    if error:
+        logger.error(f"OAuth2 authorization error from {provider}: {error} - {error_description}")
+        error_redirect = f"{scheme}://{host}/login?error={error}&error_description={error_description}"
+        return RedirectResponse(url=error_redirect, status_code=302)
+    
+    # Check if authorization code is present
+    if not code:
+        logger.error(f"Missing authorization code in callback from {provider}")
+        error_redirect = f"{scheme}://{host}/login?error=missing_code"
+        return RedirectResponse(url=error_redirect, status_code=302)
+    
+    logger.info(f"Received OAuth2 callback from {provider} with authorization code")
+    logger.debug(f"State: {state}, Code: {code[:20]}...")
+    
+    # Get registration to validate provider
+    registrations = settings.get_oauth2_registrations()
+    registration = registrations.get(provider, {})
+    
+    if not registration or not registration.get('issuer'):
+        logger.error(f"Unknown OAuth2 provider/realm: {provider}")
+        error_redirect = f"{scheme}://{host}/login?error=invalid_provider"
+        return RedirectResponse(url=error_redirect, status_code=302)
+    
+    # Get post-login redirect path
+    post_login_path = settings.get_post_login_redirect_path()
+    redirect_url = f"{scheme}://{host}{post_login_path}"
+    
+    # In a real implementation, you would:
+    # 1. Exchange authorization code for tokens using client credentials
+    # 2. Store tokens in session/cookies
+    # 3. Create authenticated session
+    # 4. Redirect to post-login URL
+    
+    logger.info(f"OAuth2 callback processed successfully for {provider}")
+    logger.debug(f"Redirecting to: {redirect_url}")
+    
+    # For now, redirect to home with code in query parameter
+    # The frontend or another service would handle token exchange
+    callback_redirect = f"{redirect_url}?code={code}&state={state}&provider={provider}" if state else f"{redirect_url}?code={code}&provider={provider}"
+    
+    return RedirectResponse(url=callback_redirect, status_code=302)
 
 
 @router.get("/login-options", response_model=List[LoginOptionDto], tags=["authentication"])
