@@ -24,6 +24,12 @@ ENV/
 .coverage
 htmlcov/
 
+# Environment Variables
+.env
+.env.local
+.env.*.local
+*.env
+
 # Logs
 *.log
 logs/
