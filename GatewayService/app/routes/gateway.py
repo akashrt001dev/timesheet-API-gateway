@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request, Response, Header, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 import json
 from datetime import datetime
+import httpx
 
 from app.config.settings import settings
 from app.models import UserDto, LoginOptionDto
@@ -14,6 +15,21 @@ from app.utils import TokenProcessor, MultiTenantResolver, OAuthClientHelper
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["gateway"])
+
+# Global HTTP client for connection pooling and better performance
+_http_client: Optional[httpx.AsyncClient] = None
+
+async def get_http_client() -> httpx.AsyncClient:
+    """Get or create global HTTP client for connection pooling"""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            verify=False,
+            follow_redirects=True,
+            timeout=10.0,  # 10 second timeout
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+        )
+    return _http_client
 
 
 def error_response(message: str, status_code: int = 500) -> Response:
@@ -50,9 +66,9 @@ async def frontend_assets(
     session_state: Optional[str] = None
 ) -> Response:
     """
-    Handle frontend requests and assets
+    Handle frontend requests and assets with caching
     - If plain /home/ with OAuth2 params: inject params into HTML
-    - Otherwise: proxy static assets directly
+    - Otherwise: proxy static assets directly with cache headers
     
     Args:
         path_name: Path within /home/ (empty string for /home/)
@@ -62,8 +78,6 @@ async def frontend_assets(
     Returns:
         Proxied response or HTML with injected OAuth2 parameters
     """
-    import httpx
-    
     # Get frontend URL
     frontend_url = settings.get_react_uri()
     
@@ -81,11 +95,11 @@ async def frontend_assets(
         frontend_request_url += f"?{query_string}"
     
     try:
-        logger.debug(f"Frontend request: {path_name or '/'} -> {frontend_request_url}")
+        logger.debug(f"Frontend request: {path_name or '/'}")
         
-        # Fetch from frontend service
-        async with httpx.AsyncClient(verify=False, follow_redirects=True) as client:
-            response = await client.get(frontend_request_url)
+        # Use pooled HTTP client for better performance
+        client = await get_http_client()
+        response = await client.get(frontend_request_url)
         
         # For plain /home/ requests with OAuth2 params, inject them into the HTML
         if not is_asset_request and (code or provider or state or error or session_state):
@@ -132,12 +146,17 @@ async def frontend_assets(
                 media_type="text/html; charset=utf-8"
             )
         
-        # For other requests, return proxied response as-is
+        # For asset requests, return with caching headers
+        headers = dict(response.headers)
+        if is_asset_request:
+            # Add cache control headers for static assets (1 day)
+            headers['Cache-Control'] = 'public, max-age=86400'
+        
         return Response(
             content=response.content,
             status_code=response.status_code,
             media_type=response.headers.get('content-type', 'application/octet-stream'),
-            headers=dict(response.headers)
+            headers=headers
         )
     
     except Exception as e:
