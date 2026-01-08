@@ -139,7 +139,9 @@ class ConfigManager:
         registrations = {}
         
         for realm in realms:
-            env_base = f"OAUTH2_{realm.upper()}"
+            # Replace hyphens with underscores for environment variable names
+            env_realm = realm.upper().replace('-', '_')
+            env_base = f"OAUTH2_{env_realm}_"
             registrations[realm] = {
                 'client_id': os.getenv(f"{env_base}_CLIENT_ID", ''),
                 'client_secret': os.getenv(f"{env_base}_CLIENT_SECRET", ''),
