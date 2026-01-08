@@ -7,7 +7,6 @@ from fastapi import APIRouter, Request, Response, Header, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 import json
 from datetime import datetime
-import httpx
 
 from app.config.settings import settings
 from app.models import UserDto, LoginOptionDto
@@ -15,36 +14,6 @@ from app.utils import TokenProcessor, MultiTenantResolver, OAuthClientHelper
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["gateway"])
-
-# Global HTTP client for connection pooling and better performance
-_http_client: Optional[httpx.AsyncClient] = None
-
-async def get_http_client() -> httpx.AsyncClient:
-    """Get or create global HTTP client for connection pooling"""
-    global _http_client
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(
-            verify=False,
-            follow_redirects=True,
-            timeout=10.0,  # 10 second timeout
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
-        )
-    return _http_client
-
-
-def error_response(message: str, status_code: int = 500) -> Response:
-    """Create JSON error response"""
-    try:
-        content = json.dumps({"error": message})
-    except Exception as e:
-        logger.error(f"Failed to encode error: {e}")
-        content = json.dumps({"error": "Internal Server Error"})
-    
-    return Response(
-        content=content.encode(),
-        status_code=status_code,
-        media_type="application/json"
-    )
 
 
 def extract_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
@@ -54,9 +23,9 @@ def extract_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     return None
 
 
-@router.get("/home/{path_name:path}", tags=["frontend"])
-async def frontend_assets(
-    path_name: str,
+@router.get("/home", tags=["frontend"])
+@router.get("/home/", tags=["frontend"])
+async def home_redirect(
     request: Request,
     code: Optional[str] = None,
     provider: Optional[str] = None,
@@ -66,104 +35,84 @@ async def frontend_assets(
     session_state: Optional[str] = None
 ) -> Response:
     """
-    Handle frontend requests and assets with caching
-    - If plain /home/ with OAuth2 params: inject params into HTML
-    - Otherwise: proxy static assets directly with cache headers
+    OAuth2 callback handler - serves frontend with OAuth2 parameters
+    Proxies frontend from REACT_APP_URI and injects OAuth2 parameters
     
     Args:
-        path_name: Path within /home/ (empty string for /home/)
         request: Request object
-        code, provider, state, error, error_description, session_state: OAuth2 params
+        code: OAuth2 authorization code
+        provider: OAuth2 provider/realm name
+        state: State parameter for CSRF protection
+        error: Error code (if authentication failed)
+        error_description: Error description
+        session_state: Keycloak session state
         
     Returns:
-        Proxied response or HTML with injected OAuth2 parameters
+        Frontend HTML response with OAuth2 parameters available
     """
+    import httpx
+    
     # Get frontend URL
     frontend_url = settings.get_react_uri()
     
-    # Construct full path
-    if path_name:
-        frontend_request_url = f"{frontend_url}/home/{path_name}"
-        is_asset_request = True
-    else:
-        frontend_request_url = f"{frontend_url}/home/"
-        is_asset_request = False
-    
-    # Include query parameters if present
-    if request.query_params:
-        query_string = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
-        frontend_request_url += f"?{query_string}"
+    # Fetch frontend content from REACT_APP_URI
+    frontend_home_url = f"{frontend_url}/home/"
     
     try:
-        logger.debug(f"Frontend request: {path_name or '/'}")
+        # Fetch the frontend HTML
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.get(frontend_home_url)
         
-        # Use pooled HTTP client for better performance
-        client = await get_http_client()
-        response = await client.get(frontend_request_url)
+        html_content = response.text
         
-        # For plain /home/ requests with OAuth2 params, inject them into the HTML
-        if not is_asset_request and (code or provider or state or error or session_state):
-            html_content = response.text
-            
-            # Build OAuth2 parameters JSON
-            oauth_params = {}
-            if code:
-                oauth_params['code'] = code
-            if provider:
-                oauth_params['provider'] = provider
-            if state:
-                oauth_params['state'] = state
-            if session_state:
-                oauth_params['session_state'] = session_state
-            if error:
-                oauth_params['error'] = error
-                oauth_params['error_description'] = error_description or ""
-            
-            oauth_json = json.dumps(oauth_params)
-            
-            # Inject OAuth2 parameters into the HTML
-            inject_script = f"""
+        # Build OAuth2 parameters JSON
+        oauth_params = {}
+        if code:
+            oauth_params['code'] = code
+        if provider:
+            oauth_params['provider'] = provider
+        if state:
+            oauth_params['state'] = state
+        if session_state:
+            oauth_params['session_state'] = session_state
+        if error:
+            oauth_params['error'] = error
+            oauth_params['error_description'] = error_description or ""
+        
+        oauth_json = json.dumps(oauth_params)
+        
+        # Inject OAuth2 parameters into the HTML
+        inject_script = f"""
         <script>
             // OAuth2 parameters from gateway
             window.oauth2Params = {oauth_json};
             console.log('OAuth2 parameters available:', window.oauth2Params);
         </script>
         """
-            
-            # Insert script before closing </head> tag if it exists, otherwise before </body>
-            if '</head>' in html_content:
-                html_content = html_content.replace('</head>', f'{inject_script}</head>')
-            elif '</body>' in html_content:
-                html_content = html_content.replace('</body>', f'{inject_script}</body>')
-            else:
-                html_content += inject_script
-            
-            logger.info(f"OAuth2 home page - provider: {provider}, OAuth2 params injected")
-            
-            return Response(
-                content=html_content,
-                status_code=200,
-                media_type="text/html; charset=utf-8"
-            )
         
-        # For asset requests, return with caching headers
-        headers = dict(response.headers)
-        if is_asset_request:
-            # Add cache control headers for static assets (1 day)
-            headers['Cache-Control'] = 'public, max-age=86400'
+        # Insert script before closing </head> tag if it exists, otherwise before </body>
+        if '</head>' in html_content:
+            html_content = html_content.replace('</head>', f'{inject_script}</head>')
+        elif '</body>' in html_content:
+            html_content = html_content.replace('</body>', f'{inject_script}</body>')
+        else:
+            html_content += inject_script
+        
+        logger.info(f"OAuth2 home page - provider: {provider}, serving frontend from {frontend_url}")
         
         return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type=response.headers.get('content-type', 'application/octet-stream'),
-            headers=headers
+            content=html_content,
+            status_code=200,
+            media_type="text/html; charset=utf-8"
         )
     
     except Exception as e:
-        logger.error(f"Error handling frontend request {path_name}: {str(e)}")
-        return error_response(f"Failed to fetch frontend: {str(e)}", 502)
-
-
+        logger.error(f"Error fetching frontend from {frontend_home_url}: {str(e)}")
+        return Response(
+            content=f"Error loading frontend: {str(e)}",
+            status_code=502,
+            media_type="text/plain"
+        )
 
 
 @router.get("/", tags=["root"])
