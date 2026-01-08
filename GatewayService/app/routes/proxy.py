@@ -34,6 +34,15 @@ async def proxy_api_request(
     """
     request_path = f"/{full_path}"
     
+    # Skip gateway-specific paths that should not be proxied
+    gateway_paths = ['/home', '/home/', '/login', '/login/', '/logout', '/logout_api', '/me', '/health', '/health/live', '/health/ready']
+    if any(request_path == gp or request_path.startswith(gp + '/') for gp in gateway_paths):
+        return Response(
+            content=b'{"error": "No matching route"}',
+            status_code=404,
+            media_type="application/json"
+        )
+    
     # Check if this is a direct service request (e.g., /user-management-service or /user-management-service/...)
     path_parts = full_path.split('/')
     first_part = path_parts[0] if path_parts else ""
