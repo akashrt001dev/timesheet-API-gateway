@@ -4,7 +4,7 @@ Routes for API proxying and request forwarding
 import logging
 import json
 import re
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from fastapi import APIRouter, Request, Response, Header
 from app.config.settings import settings
 from app.utils import RouterMatcher, ProxyClient, HeaderProcessor, PathRewriter
@@ -74,7 +74,7 @@ def apply_gateway_filters(
     request_path: str,
     filters: List[str],
     request: Request
-) -> tuple[str, List[str]]:
+) -> Tuple[str, List[str]]:
     """
     Apply all gateway filters to the request path in order
     Handles RewritePath and RemoveRequestHeader filters
