@@ -44,9 +44,7 @@ def error_response(message: str, status_code: int = 500) -> Response:
 def prepare_request_headers(request: Request, headers_to_remove: List[str] = None) -> Dict[str, str]:
     """
     Prepare headers for proxying
-    - Use whitelist of safe headers to prevent Java backend errors
     - Remove host header (will be set by HTTP client)
-    - Remove null/empty headers (prevent Java NullPointerException)
     - Remove sensitive headers specified in filters
     - Keep authorization header
     
@@ -55,60 +53,21 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
         headers_to_remove: List of header names to remove (from RemoveRequestHeader filter)
         
     Returns:
-        Cleaned headers dictionary (safe for both HTTP and HTTPS backends)
+        Cleaned headers dictionary
     """
     headers = dict(request.headers)
     
-    # Whitelist of safe headers that won't cause Java Spring Boot issues
-    SAFE_HEADERS = {
-        'authorization',
-        'content-type',
-        'content-length',
-        'accept',
-        'accept-encoding',
-        'accept-language',
-        'user-agent',
-        'x-forwarded-for',
-        'x-forwarded-proto',
-        'x-forwarded-host',
-        'x-real-ip',
-        'x-request-id',
-        'x-correlation-id',
-        'x-tenant-id',
-        'x-user-id',
-        'origin',
-        'referer',
-        'cache-control',
-    }
-    
-    # Start with whitelist approach - only include safe headers
-    cleaned_headers = {}
-    for key, value in headers.items():
-        # Skip null or empty values
-        if value is None or (isinstance(value, str) and value.strip() == ''):
-            logger.debug(f"Skipped empty/null header: {key}")
-            continue
-        
-        # Skip host header - HTTP client will set it
-        if key.lower() == 'host':
-            logger.debug(f"Skipped host header")
-            continue
-        
-        # Only include whitelisted headers
-        if key.lower() in SAFE_HEADERS:
-            cleaned_headers[key] = value
-        else:
-            logger.debug(f"Filtered out header not in whitelist: {key}")
+    # Always remove host - HTTP client will set it correctly
+    headers.pop('host', None)
     
     # Remove headers specified in RemoveRequestHeader filter
     if headers_to_remove:
         for header in headers_to_remove:
             header_lower = header.strip().lower()
-            cleaned_headers.pop(header_lower, None)
-            logger.debug(f"Removed header via filter: {header_lower}")
+            headers.pop(header_lower, None)
+            logger.debug(f"Removed header: {header_lower}")
     
-    logger.debug(f"Final cleaned headers: {list(cleaned_headers.keys())}")
-    return cleaned_headers
+    return headers
 
 
 def apply_gateway_filters(
