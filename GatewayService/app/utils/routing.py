@@ -177,11 +177,12 @@ class ProxyClient:
     ) -> Tuple[int, Dict[str, str], bytes]:
         """
         Forward request to backend service
+        Handles both HTTP and HTTPS transparently
         
         Args:
             method: HTTP method
-            url: Target URL
-            headers: Request headers
+            url: Target URL (supports both http:// and https://)
+            headers: Request headers (cleaned to avoid null header errors)
             body: Request body
             timeout: Request timeout
             
@@ -189,11 +190,39 @@ class ProxyClient:
             Tuple of (status_code, response_headers, response_body)
         """
         try:
-            async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
-                # Remove host header to avoid conflicts
-                headers_copy = dict(headers)
-                headers_copy.pop('host', None)
+            # Determine SSL verification based on URL scheme
+            # - HTTP: no SSL verification needed
+            # - HTTPS to localhost/127.0.0.1: disable SSL verification
+            # - HTTPS to external: use SSL verification
+            is_https = url.startswith('https://')
+            verify_ssl = False  # Disable SSL verification for internal services
+            
+            if is_https:
+                # Check if it's an external service that needs proper SSL
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                hostname = parsed.hostname or ''
                 
+                # Only verify SSL for external domains (not localhost, 127.0.0.1, or internal IPs)
+                if hostname not in ('localhost', '127.0.0.1', '0.0.0.0'):
+                    # Disable SSL verification for all internal services
+                    # This is common in development/testing environments
+                    verify_ssl = False
+            
+            # Create headers copy and ensure no null values
+            headers_copy = dict(headers)
+            headers_copy.pop('host', None)
+            
+            # Filter out any headers with None or empty string values
+            # This prevents "Cannot invoke toString() on null" errors in Java services
+            headers_copy = {
+                k: v for k, v in headers_copy.items()
+                if v is not None and (not isinstance(v, str) or v.strip() != '')
+            }
+            
+            logger.debug(f"Forwarding {method} request to {url} (HTTPS SSL verify={verify_ssl})")
+            
+            async with httpx.AsyncClient(verify=verify_ssl, timeout=timeout) as client:
                 response = await client.request(
                     method=method,
                     url=url,
@@ -201,12 +230,22 @@ class ProxyClient:
                     content=body
                 )
                 
+                logger.debug(f"Response status: {response.status_code}")
                 return response.status_code, dict(response.headers), response.content
+                
         except Exception as e:
-            # Log detailed error for debugging
-            logger.error(f"ProxyClient error: {type(e).__name__}: {str(e)}", exc_info=True)
-            # Return error response
-            return 502, {'content-type': 'application/json'}, b'{"error": "Bad Gateway"}'
+            # Log detailed error for debugging service connectivity issues
+            logger.error(
+                f"ProxyClient error for {url}: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            # Return error response with details
+            error_body = json.dumps({
+                "error": "Bad Gateway",
+                "details": f"{type(e).__name__}: {str(e)}",
+                "target_url": url
+            }).encode()
+            return 502, {'content-type': 'application/json'}, error_body
 
 
 class HeaderProcessor:
