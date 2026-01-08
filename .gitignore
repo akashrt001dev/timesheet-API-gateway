@@ -26,6 +26,7 @@ htmlcov/
 
 # Environment Variables
 .env
+.env.qa
 .env.local
 .env.*.local
 *.env
