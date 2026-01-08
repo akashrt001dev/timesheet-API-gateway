@@ -242,7 +242,12 @@ async def proxy_api_request(
                 f"Error forwarding request to {full_target_url}: {type(e).__name__}: {str(e)}",
                 exc_info=True
             )
-            return error_response(f"Service unavailable: {str(e)}", status_code=502)
+            # Provide detailed error message for debugging
+            error_details = f"Service unavailable: {type(e).__name__}: {str(e)}"
+            if isinstance(e, Exception):
+                import traceback
+                error_details += f" | Traceback: {traceback.format_exc()}"
+            return error_response(error_details, status_code=502)
         
         # Deduplicate response headers
         cleaned_headers = HeaderProcessor.dedupe_headers(response_headers)
