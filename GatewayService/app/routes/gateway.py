@@ -244,6 +244,70 @@ async def get_login_options(
     return [login_option]
 
 
+@router.get("/home", tags=["home"])
+@router.get("/home/", tags=["home"])
+async def home_page(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    provider: Optional[str] = None,
+    authorization: Optional[str] = Header(None)
+) -> Dict[str, Any]:
+    """
+    Home page endpoint
+    Displays dashboard or returns status information
+    
+    Args:
+        request: Request object
+        code: Authorization code from OAuth2 callback
+        state: State parameter from OAuth2 callback
+        provider: OAuth2 provider/realm
+        authorization: Authorization header (Bearer token)
+        
+    Returns:
+        Home page data or redirect
+    """
+    # Check if user is authenticated
+    is_authenticated = authorization and authorization.startswith('Bearer ')
+    
+    logger.info(f"Home page accessed - authenticated: {is_authenticated}")
+    
+    if code:
+        logger.info(f"Processing authorization code from {provider}")
+        # Authorization code is in the URL, frontend should handle token exchange
+        return {
+            "status": "success",
+            "message": "Ready to exchange authorization code for tokens",
+            "code": code,
+            "state": state,
+            "provider": provider,
+            "authenticated": is_authenticated
+        }
+    
+    if is_authenticated:
+        # Get user info
+        token = authorization[7:]  # Remove 'Bearer ' prefix
+        user = TokenProcessor.extract_user_info(token)
+        logger.info(f"User {user.subject} accessing home page")
+        return {
+            "status": "authenticated",
+            "message": "Welcome to the application",
+            "user": user.dict() if hasattr(user, 'dict') else user.__dict__
+        }
+    else:
+        logger.info("Unauthenticated user accessing home page")
+        host = request.headers.get("host", "localhost")
+        hostname = host.split(':')[0]
+        master_entity = settings.get_master_entity()
+        realm = MultiTenantResolver.extract_subdomain(hostname, master_entity)
+        
+        return {
+            "status": "unauthenticated",
+            "message": "Please login to continue",
+            "login_url": f"{settings.get_scheme()}://{host}/oauth2/authorization/{realm}"
+        }
+
+
 @router.get("/me", response_model=UserDto, tags=["user"])
 async def get_me(
     token: Optional[str] = Depends(extract_token)
