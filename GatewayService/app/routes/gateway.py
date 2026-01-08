@@ -25,32 +25,99 @@ def extract_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
 
 @router.get("/home", tags=["frontend"])
 @router.get("/home/", tags=["frontend"])
-async def home_redirect(request: Request) -> RedirectResponse:
+async def home_redirect(
+    request: Request,
+    code: Optional[str] = None,
+    provider: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+    session_state: Optional[str] = None
+) -> Response:
     """
-    Handle home page redirect with OAuth2 parameters
-    Keeps the tenant subdomain and preserves OAuth2 parameters
+    OAuth2 callback handler - serves home page with OAuth2 parameters
+    Passes auth code to frontend via HTML response
     
     Args:
         request: Request object
+        code: OAuth2 authorization code
+        provider: OAuth2 provider/realm name
+        state: State parameter for CSRF protection
+        error: Error code (if authentication failed)
+        error_description: Error description
+        session_state: Keycloak session state
         
     Returns:
-        Redirect response to tenant-specific home page
+        HTML response with OAuth2 parameters embedded for frontend
     """
-    host = request.headers.get("host", "localhost")
-    scheme = settings.get_scheme()
+    # Validate provider exists in configuration
+    if provider:
+        registrations = settings.get_oauth2_registrations()
+        if provider not in registrations:
+            logger.error(f"Invalid OAuth2 provider: {provider}")
+            error_msg = "Invalid provider"
+        else:
+            registration = registrations.get(provider, {})
+            if not registration.get('issuer'):
+                logger.error(f"Provider not configured: {provider}")
+                error_msg = "Provider not configured"
+            else:
+                error_msg = None
+    else:
+        error_msg = None
     
-    # Preserve query parameters (code, state, provider, etc.)
-    query_string = request.url.query
+    # Build OAuth2 parameters JSON for frontend
+    oauth_params = {}
+    if code:
+        oauth_params['code'] = code
+    if provider:
+        oauth_params['provider'] = provider
+    if state:
+        oauth_params['state'] = state
+    if session_state:
+        oauth_params['session_state'] = session_state
+    if error:
+        oauth_params['error'] = error
+        oauth_params['error_description'] = error_description or ""
     
-    # Redirect to the same host's home page (preserves tenant subdomain)
-    # e.g., https://smmc-io-prod.timesmart.io/home/?code=...&provider=...
-    redirect_url = f"{scheme}://{host}/home/"
-    if query_string:
-        redirect_url += f"?{query_string}"
+    oauth_json = json.dumps(oauth_params)
     
-    logger.info(f"Redirecting home page request to: {redirect_url}")
+    logger.info(f"OAuth2 home page - provider: {provider}, code: {code[:20] if code else 'None'}...")
     
-    return RedirectResponse(url=redirect_url, status_code=302)
+    # Return HTML that passes OAuth parameters to frontend app
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Loading...</title>
+        <meta charset="utf-8">
+        <script>
+            // Store OAuth2 parameters in sessionStorage for frontend to access
+            window.oauth2Params = {oauth_json};
+            console.log('OAuth2 parameters received:', window.oauth2Params);
+        </script>
+    </head>
+    <body>
+        <div id="app"></div>
+        <script>
+            // Frontend app initialization script
+            // The frontend app will check for oauth2Params and complete the auth flow
+            document.addEventListener('DOMContentLoaded', function() {{
+                // Frontend React/Vue/Angular app should load here
+                console.log('Home page loaded with OAuth2 parameters');
+                // You can load your frontend app here or redirect to it
+                // window.location.href = '/app/index.html';
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    return Response(
+        content=html_content,
+        status_code=200,
+        media_type="text/html; charset=utf-8"
+    )
 
 
 @router.get("/", tags=["root"])
