@@ -3,12 +3,15 @@ OAuth2 and JWT utilities for token processing
 """
 import json
 import base64
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import jwt
 from jwt import PyJWTError
 import httpx
 from app.models.schemas import TokenClaims, UserDto
+
+logger = logging.getLogger(__name__)
 
 
 class TokenProcessor:
