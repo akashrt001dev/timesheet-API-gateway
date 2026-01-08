@@ -74,32 +74,28 @@ async def oauth2_authorization(
     registrations = settings.get_oauth2_registrations()
     registration = registrations.get(realm, {})
     
-    if not registration:
+    if not registration or not registration.get('issuer'):
         logger.error(f"No OAuth2 registration found for realm: {realm}")
         return JSONResponse(
             status_code=404,
             content={"error": f"No OAuth2 configuration for realm: {realm}"}
         )
     
-    # Get provider configuration
-    provider_key = registration.get('provider', f'keycloak-{realm}')
-    providers = settings.get_oauth2_providers()
-    issuer_uri = providers.get(provider_key, '')
-    
-    if not issuer_uri:
-        logger.error(f"No issuer URI found for provider: {provider_key}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"OAuth2 provider not configured: {provider_key}"}
-        )
-    
-    # Get OAuth2 client configuration
+    # Get configuration from registration
+    issuer_uri = registration.get('issuer', '').rstrip('/')
     client_id = registration.get('client_id')
     redirect_uri = registration.get('redirect_uri')
-    scope = registration.get('scope', 'openid profile email')
+    scope = registration.get('scope', 'openid,profile,email')
+    
+    if not client_id or not redirect_uri or not issuer_uri:
+        logger.error(f"Incomplete OAuth2 configuration for realm: {realm}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"OAuth2 configuration incomplete for realm: {realm}"}
+        )
     
     # Get authorization endpoint from issuer
-    auth_endpoint = f"{issuer_uri.rstrip('/')}/protocol/openid-connect/auth"
+    auth_endpoint = f"{issuer_uri}/protocol/openid-connect/auth"
     
     # Get authorization request parameters
     query_params = request.query_params
@@ -111,14 +107,17 @@ async def oauth2_authorization(
         f"&redirect_uri={redirect_uri}"
         f"&response_type=code"
         f"&scope={scope}"
-        f"&state={query_params.get('state', '')}"
     )
+    
+    if query_params.get('state'):
+        authorization_url += f"&state={query_params.get('state')}"
     
     if query_params.get('nonce'):
         authorization_url += f"&nonce={query_params.get('nonce')}"
     
     logger.info(f"Redirecting to OAuth2 authorization for realm: {realm}")
     logger.debug(f"Authorization endpoint: {auth_endpoint}")
+    logger.debug(f"Client ID: {client_id}")
     
     return RedirectResponse(url=authorization_url, status_code=302)
 
