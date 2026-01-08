@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request, Response, Header, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 import json
 from datetime import datetime
+from urllib.parse import urlencode
 
 from app.config.settings import settings
 from app.models import UserDto, LoginOptionDto
@@ -36,6 +37,69 @@ def extract_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     if authorization and authorization.startswith('Bearer '):
         return authorization[7:]  # Remove 'Bearer ' prefix
     return None
+
+
+@router.get("/login", name="Keycloak Login", tags=["authentication"])
+async def login(request: Request) -> RedirectResponse:
+    """
+    Redirect user to Keycloak login page (OIDC Authorization Code Flow)
+    
+    Args:
+        request: Request object
+        
+    Returns:
+        Redirect response to Keycloak authorization endpoint
+    """
+    host = request.headers.get("host", "localhost")
+    scheme = settings.get_scheme()
+    master_entity = settings.get_master_entity()
+    
+    # Resolve realm from subdomain
+    subdomain = MultiTenantResolver.extract_subdomain(host, master_entity)
+    
+    # Get OAuth2 registration for this realm
+    registrations = settings.get_oauth2_registrations()
+    registration = registrations.get(subdomain, {})
+    
+    if not registration or not registration.get('issuer'):
+        logger.error(f"No OAuth2 registration found for realm: {subdomain}")
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No OAuth2 configuration for realm: {subdomain}"}
+        )
+    
+    # Get configuration from registration
+    issuer_uri = registration.get('issuer', '').rstrip('/')
+    client_id = registration.get('client_id')
+    redirect_uri = registration.get('redirect_uri')
+    scope = registration.get('scope', 'openid profile email offline_access roles')
+    
+    # Convert comma-separated scopes to space-separated for OAuth2
+    scope = scope.replace(',', ' ').strip()
+    
+    if not client_id or not redirect_uri or not issuer_uri:
+        logger.error(f"Incomplete OAuth2 configuration for realm: {subdomain}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"OAuth2 configuration incomplete for realm: {subdomain}"}
+        )
+    
+    # Get authorization endpoint from issuer
+    auth_endpoint = f"{issuer_uri}/protocol/openid-connect/auth"
+    
+    # Build authorization parameters with proper URL encoding
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+    }
+    
+    login_url = f"{auth_endpoint}?{urlencode(params)}"
+    
+    logger.info(f"Redirecting to Keycloak login for realm: {subdomain}")
+    
+    return RedirectResponse(url=login_url, status_code=302)
 
 
 @router.get("/home/{path_name:path}", tags=["frontend"])
