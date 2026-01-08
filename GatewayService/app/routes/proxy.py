@@ -45,7 +45,7 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
     """
     Prepare headers for proxying
     - Remove host header (will be set by HTTP client)
-    - Remove empty/null headers that cause issues with Java services
+    - Remove null/empty headers (prevent Java NullPointerException)
     - Remove sensitive headers specified in filters
     - Keep authorization header
     
@@ -54,14 +54,14 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
         headers_to_remove: List of header names to remove (from RemoveRequestHeader filter)
         
     Returns:
-        Cleaned headers dictionary (safe for Java backend services)
+        Cleaned headers dictionary (safe for both HTTP and HTTPS backends)
     """
     headers = dict(request.headers)
     
     # Always remove host - HTTP client will set it correctly
     headers.pop('host', None)
     
-    # Remove headers with empty or None values (Java services will throw errors on null headers)
+    # Remove headers with null or empty values (Java services fail on null headers)
     headers_to_delete = []
     for key, value in headers.items():
         if value is None or (isinstance(value, str) and value.strip() == ''):
@@ -77,15 +77,6 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
             header_lower = header.strip().lower()
             headers.pop(header_lower, None)
             logger.debug(f"Removed header via filter: {header_lower}")
-    
-    # Remove problematic headers that often cause issues
-    problematic_headers = [
-        'content-length',  # Let httpx set this based on body
-        'transfer-encoding',  # Let httpx handle this
-        'connection',  # Connection management is handled by httpx
-    ]
-    for header in problematic_headers:
-        headers.pop(header, None)
     
     return headers
 
