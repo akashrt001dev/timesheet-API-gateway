@@ -41,17 +41,18 @@ def error_response(message: str, status_code: int = 500) -> Response:
     )
 
 
-def prepare_request_headers(request: Request, headers_to_remove: List[str] = None) -> Dict[str, str]:
+def prepare_request_headers(request: Request, headers_to_remove: List[str] = None, request_path: str = "") -> Dict[str, str]:
     """
     Prepare headers for proxying
     - Remove host header (will be set by HTTP client)
     - Add X-Forwarded-* headers for backend services
     - Remove sensitive headers specified in filters
-    - Keep authorization header
+    - Keep authorization header, or add dummy for public endpoints
     
     Args:
         request: Incoming request
         headers_to_remove: List of header names to remove (from RemoveRequestHeader filter)
+        request_path: Full request path for context
         
     Returns:
         Cleaned headers dictionary with forwarded headers
@@ -60,6 +61,30 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
     
     # Always remove host - HTTP client will set it correctly
     headers.pop('host', None)
+    
+    # =====================================================
+    # PUBLIC ENDPOINT HANDLING - NO AUTH REQUIRED
+    # =====================================================
+    # List of public paths that don't require Authorization header
+    PUBLIC_ENDPOINTS = [
+        '/auth/login',
+        '/auth/register',
+        '/auth/forgot-password',
+        '/auth/reset-password',
+        '/auth/verify-email',
+        '/health',
+        '/metrics'
+    ]
+    
+    # Check if this is a public endpoint and no Authorization header is present
+    is_public_endpoint = any(request_path.startswith(ep) or request_path.endswith(ep) for ep in PUBLIC_ENDPOINTS)
+    has_auth_header = 'authorization' in headers
+    
+    if is_public_endpoint and not has_auth_header:
+        # Add a dummy/guest authorization token for public endpoints
+        # This allows backends with global auth filters to process public endpoints
+        headers['authorization'] = 'Bearer guest'
+        logger.info(f"Added guest Authorization for public endpoint: {request_path}")
     
     # =====================================================
     # ADD FORWARDED HEADERS (HTTPS COMPATIBILITY FIX)
@@ -88,10 +113,6 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
     if "correlation_id" in request.scope:
         headers["x-correlation-id"] = request.scope["correlation_id"]
         logger.debug(f"Added X-Correlation-ID: {request.scope['correlation_id']}")
-
-    # =====================================================
-    # ADD FORWARDED HEADERS (HTTPS COMPATIBILITY FIX)
-    # =====================================================
     
     # Remove headers specified in RemoveRequestHeader filter
     if headers_to_remove:
@@ -255,7 +276,7 @@ async def proxy_api_request(
         full_target_url = f"{service_url.rstrip('/')}{remaining_path}"
         
         # Prepare headers
-        headers = prepare_request_headers(request)
+        headers = prepare_request_headers(request, request_path=remaining_path)
         
         # Get request body
         body = await request.body() if request.method in ["POST", "PUT", "PATCH"] else None
@@ -338,7 +359,7 @@ async def proxy_api_request(
     full_target_url = f"{target_url.rstrip('/')}{rewritten_path}"
     
     # Prepare headers (apply RemoveRequestHeader filters)
-    headers = prepare_request_headers(request, headers_to_remove)
+    headers = prepare_request_headers(request, headers_to_remove=headers_to_remove, request_path=request_path)
     
     # Get request body
     body = await request.body() if request.method in ["POST", "PUT", "PATCH"] else None
