@@ -45,6 +45,7 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
     """
     Prepare headers for proxying
     - Remove host header (will be set by HTTP client)
+    - Add X-Forwarded-* headers for backend services
     - Remove sensitive headers specified in filters
     - Keep authorization header
     
@@ -53,12 +54,44 @@ def prepare_request_headers(request: Request, headers_to_remove: List[str] = Non
         headers_to_remove: List of header names to remove (from RemoveRequestHeader filter)
         
     Returns:
-        Cleaned headers dictionary
+        Cleaned headers dictionary with forwarded headers
     """
     headers = dict(request.headers)
     
     # Always remove host - HTTP client will set it correctly
     headers.pop('host', None)
+    
+    # =====================================================
+    # ADD FORWARDED HEADERS (HTTPS COMPATIBILITY FIX)
+    # =====================================================
+    # Tell backend the original protocol (http / https)
+    # This is crucial: backend receives HTTP but needs to know original was HTTPS
+    if "x-forwarded-proto" not in headers:
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        headers["x-forwarded-proto"] = proto
+        logger.debug(f"Added X-Forwarded-Proto: {proto}")
+    
+    # Client IP tracking
+    if "x-forwarded-for" not in headers:
+        if request.client and request.client.host:
+            headers["x-forwarded-for"] = request.client.host
+            logger.debug(f"Added X-Forwarded-For: {request.client.host}")
+    
+    # Original host from client request
+    if "x-forwarded-host" not in headers:
+        host = request.headers.get("host")
+        if host:
+            headers["x-forwarded-host"] = host
+            logger.debug(f"Added X-Forwarded-Host: {host}")
+    
+    # Add correlation ID if available (from middleware for request tracing)
+    if "correlation_id" in request.scope:
+        headers["x-correlation-id"] = request.scope["correlation_id"]
+        logger.debug(f"Added X-Correlation-ID: {request.scope['correlation_id']}")
+
+    # =====================================================
+    # ADD FORWARDED HEADERS (HTTPS COMPATIBILITY FIX)
+    # =====================================================
     
     # Remove headers specified in RemoveRequestHeader filter
     if headers_to_remove:
