@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Request, Response, Header, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 import json
+import httpx
 from datetime import datetime
 
 from app.config.settings import settings
@@ -306,6 +307,144 @@ async def home_page(
             "message": "Please login to continue",
             "login_url": f"{settings.get_scheme()}://{host}/oauth2/authorization/{realm}"
         }
+
+
+@router.post("/oauth2/token", tags=["authentication"])
+async def exchange_authorization_code(
+    request: Request,
+    code: str,
+    provider: str,
+    redirect_uri: Optional[str] = None
+) -> Response:
+    """
+    Exchange authorization code for access token
+    
+    Args:
+        request: Request object
+        code: Authorization code from Keycloak
+        provider: OAuth2 provider/realm name
+        redirect_uri: Redirect URI (optional, uses registered URI if not provided)
+        
+    Returns:
+        JSON response with tokens and user info
+    """
+    logger.info(f"Token exchange request for provider: {provider}")
+    
+    # Get OAuth2 registration
+    registrations = settings.get_oauth2_registrations()
+    registration = registrations.get(provider, {})
+    
+    if not registration or not registration.get('issuer'):
+        logger.error(f"Unknown OAuth2 provider: {provider}")
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Unknown OAuth2 provider"}
+        )
+    
+    # Get Keycloak configuration
+    issuer_uri = registration.get('issuer', '').rstrip('/')
+    client_id = registration.get('client_id')
+    client_secret = registration.get('client_secret')
+    registered_redirect_uri = registration.get('redirect_uri')
+    
+    # Use provided redirect_uri or fall back to registered one
+    final_redirect_uri = redirect_uri or registered_redirect_uri
+    
+    if not client_id or not client_secret:
+        logger.error(f"Missing OAuth2 credentials for provider: {provider}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "OAuth2 credentials not configured"}
+        )
+    
+    # Token endpoint
+    token_endpoint = f"{issuer_uri}/protocol/openid-connect/token"
+    
+    # Prepare token request
+    token_data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": final_redirect_uri
+    }
+    
+    try:
+        # Exchange authorization code for tokens
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.post(
+                token_endpoint,
+                data=token_data,
+                timeout=30.0
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Token exchange failed: {response.status_code} - {response.text}")
+                return JSONResponse(
+                    status_code=response.status_code,
+                    content={"error": "Token exchange failed", "details": response.text}
+                )
+            
+            token_response = response.json()
+            
+            # Extract tokens
+            access_token = token_response.get('access_token')
+            refresh_token = token_response.get('refresh_token')
+            id_token = token_response.get('id_token')
+            expires_in = token_response.get('expires_in', 300)
+            
+            logger.info(f"Token exchange successful for provider: {provider}")
+            logger.debug(f"Access token issued with {expires_in}s expiration")
+            
+            # Extract user info from access token
+            user_info = TokenProcessor.extract_user_info(access_token) if access_token else None
+            
+            # Create response with tokens
+            json_response = {
+                "status": "success",
+                "message": "Token exchange successful",
+                "provider": provider,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "id_token": id_token,
+                "expires_in": expires_in,
+                "token_type": token_response.get('token_type', 'Bearer'),
+                "user": user_info.dict() if user_info and hasattr(user_info, 'dict') else user_info.__dict__ if user_info else None
+            }
+            
+            # Create response with HTTP-only cookie
+            response_obj = JSONResponse(content=json_response, status_code=200)
+            
+            # Set secure HTTP-only cookies for tokens
+            response_obj.set_cookie(
+                key="access_token",
+                value=access_token,
+                httponly=True,
+                secure=settings.get_scheme() == "https",
+                samesite="Lax",
+                max_age=expires_in
+            )
+            
+            if refresh_token:
+                response_obj.set_cookie(
+                    key="refresh_token",
+                    value=refresh_token,
+                    httponly=True,
+                    secure=settings.get_scheme() == "https",
+                    samesite="Lax",
+                    max_age=7 * 24 * 60 * 60  # 7 days
+                )
+            
+            logger.info(f"Tokens stored in HTTP-only cookies for user")
+            
+            return response_obj
+            
+    except Exception as e:
+        logger.error(f"Token exchange error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Token exchange failed", "details": str(e)}
+        )
 
 
 @router.get("/me", response_model=UserDto, tags=["user"])
