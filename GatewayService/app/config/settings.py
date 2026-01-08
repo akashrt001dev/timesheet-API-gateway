@@ -117,38 +117,62 @@ class ConfigManager:
     # OAuth2 Configuration - Dynamic
     # ====================================================================
     @classmethod
-    def get_oauth2_providers(cls) -> Dict[str, Dict[str, str]]:
-        """Get OAuth2 providers configuration from environment"""
+    def get_oauth2_providers(cls) -> Dict[str, str]:
+        """
+        Get OAuth2 providers configuration from environment
+        Returns a dict mapping provider keys (like 'keycloak-apollo-demo') to issuer URIs
+        Matches Java's spring.security.oauth2.client.provider configuration
+        """
         realms = cls.get_keycloak_realms()
         providers = {}
         keycloak_url = cls.get_keycloak_server_url()
         
         for realm in realms:
-            env_key = f"OAUTH2_{realm.upper()}_ISSUER"
+            # Create provider key in format 'keycloak-{realm}'
+            provider_key = f"keycloak-{realm}"
+            env_key = f"OAUTH2_{realm.upper().replace('-', '_')}_ISSUER"
             issuer = os.getenv(env_key, f"{keycloak_url}/realms/{realm}")
-            providers[realm] = {
-                'issuer_uri': issuer,
-                'realm': realm
-            }
+            providers[provider_key] = issuer
+        
         return providers
     
     @classmethod
     def get_oauth2_registrations(cls) -> Dict[str, Dict[str, str]]:
-        """Get OAuth2 client registrations from environment"""
+        """
+        Get OAuth2 client registrations from environment
+        Returns a dict mapping realm names to their registration config
+        Matches Java's spring.security.oauth2.client.registration configuration
+        """
         realms = cls.get_keycloak_realms()
         registrations = {}
+        keycloak_url = cls.get_keycloak_server_url()
+        scheme = cls.get_scheme()
         
         for realm in realms:
             # Replace hyphens with underscores for environment variable names
             env_realm = realm.upper().replace('-', '_')
             env_base = f"OAUTH2_{env_realm}"
+            
+            # Get issuer - fallback to constructing from realm
+            issuer = os.getenv(f"{env_base}_ISSUER", f"{keycloak_url}/realms/{realm}")
+            
+            # Get redirect URI - fallback to standard format
+            redirect_uri = os.getenv(
+                f"{env_base}_REDIRECT_URI",
+                f"{scheme}://{realm}.mytimesmart.com/login/oauth2/code/{realm}"
+            )
+            
             registrations[realm] = {
-                'client_id': os.getenv(f"{env_base}_CLIENT_ID", ''),
+                'authorization_grant_type': 'authorization_code',
+                'client_name': 'Keycloak',
+                'client_id': os.getenv(f"{env_base}_CLIENT_ID", 'spring-addons-confidential'),
                 'client_secret': os.getenv(f"{env_base}_CLIENT_SECRET", ''),
-                'issuer': os.getenv(f"{env_base}_ISSUER", ''),
-                'redirect_uri': os.getenv(f"{env_base}_REDIRECT_URI", ''),
-                'scope': os.getenv(f"{env_base}_SCOPE", 'openid,profile,email'),
+                'provider': f'keycloak-{realm}',  # Links to provider
+                'issuer': issuer,
+                'redirect_uri': redirect_uri,
+                'scope': os.getenv(f"{env_base}_SCOPE", 'openid,profile,email,offline_access,roles'),
             }
+        
         return registrations
     
     # ====================================================================
@@ -156,8 +180,12 @@ class ConfigManager:
     # ====================================================================
     @classmethod
     def get_gateway_routes(cls) -> List[Dict[str, Any]]:
-        """Get gateway routes configuration"""
+        """
+        Get gateway routes configuration
+        Matches Java's spring.cloud.gateway.routes configuration
+        """
         return [
+            # Frontend routes
             {
                 'id': 'greetings',
                 'uri': cls.get_greetings_api_uri(),
@@ -173,11 +201,27 @@ class ConfigManager:
                 'uri': cls.get_flutter_uri(),
                 'predicates': ['Path=/home/**'],
             },
+            # Microservice routes - direct paths
             {
                 'id': 'user-management-service',
                 'uri': f"lb://{os.getenv('SERVICE_USER_MANAGEMENT_HOST', 'user-management-service')}",
                 'predicates': ['Path=/auth/**, /user/**, /roles/**'],
-                'filters': ['RewritePath=/auth/(?<path>.*), /$\\{path}', 'RewritePath=/user/(?<path>.*), /$\\{path}'],
+                'filters': [
+                    'RewritePath=/auth/(?<path>.*), /$\\{path}',
+                    'RewritePath=/user/(?<path>.*), /$\\{path}',
+                    'RewritePath=/roles/(?<path>.*), /$\\{path}'
+                ],
+            },
+            # Microservice routes - API paths with /api prefix
+            {
+                'id': 'user-management-service-api',
+                'uri': f"lb://{os.getenv('SERVICE_USER_MANAGEMENT_HOST', 'user-management-service')}",
+                'predicates': ['Path=/api/user-management-service/**'],
+                'filters': [
+                    'RewritePath=/api/user-management-service/auth/(?<path>.*), /auth/$\\{path}',
+                    'RewritePath=/api/user-management-service/user/(?<path>.*), /user/$\\{path}',
+                    'RewritePath=/api/user-management-service/roles/(?<path>.*), /roles/$\\{path}'
+                ],
             },
             {
                 'id': 'contract-managment-service',
@@ -186,22 +230,46 @@ class ConfigManager:
                 'filters': ['RewritePath=/contracts/(?<path>.*), /$\\{path}'],
             },
             {
+                'id': 'contract-managment-service-api',
+                'uri': f"lb://{os.getenv('SERVICE_CONTRACT_MANAGEMENT_HOST', 'contract-managment-service')}",
+                'predicates': ['Path=/api/contract-managment-service/**'],
+                'filters': [],  # No rewrite for API path
+            },
+            {
                 'id': 'entity-service',
                 'uri': f"lb://{os.getenv('SERVICE_ENTITY_HOST', 'entity-service')}",
                 'predicates': ['Path=/entity/**, /entityID/**'],
                 'filters': ['RewritePath=/entity/(?<path>.*), /$\\{path}'],
             },
             {
+                'id': 'entity-service-api',
+                'uri': f"lb://{os.getenv('SERVICE_ENTITY_HOST', 'entity-service')}",
+                'predicates': ['Path=/api/entity-service/**'],
+                'filters': [],  # No rewrite for API path
+            },
+            {
                 'id': 'timesheet-management-service',
                 'uri': f"lb://{os.getenv('SERVICE_TIMESHEET_MANAGEMENT_HOST', 'timesheet-management-service')}",
                 'predicates': ['Path=/timesheet/**, /activity/**'],
-                'filters': ['RewritePath=/timesheet/(?<path>.*), /$\\{path}', 'RewritePath=/activity/(?<path>.*), /$\\{path}'],
+                'filters': [
+                    'RewritePath=/timesheet/(?<path>.*), /$\\{path}',
+                    'RewritePath=/activity/(?<path>.*), /$\\{path}'
+                ],
+            },
+            {
+                'id': 'timesheet-management-service-api',
+                'uri': f"lb://{os.getenv('SERVICE_TIMESHEET_MANAGEMENT_HOST', 'timesheet-management-service')}",
+                'predicates': ['Path=/api/timesheet-management-service/**'],
+                'filters': [],  # No rewrite for API path
             },
             {
                 'id': 'notification-service',
                 'uri': f"lb://{os.getenv('SERVICE_NOTIFICATION_HOST', 'notification-service')}",
                 'predicates': ['Path=/emailtemplate/**'],
-                'filters': ['RewritePath=/emailtemplate/(?<path>.*), /$\\{path}'],
+                'filters': [
+                    'RewritePath=/emailtemplate/(?<path>.*), /$\\{path}',
+                    'RemoveRequestHeader=Cookie,Set-Cookie'
+                ],
             },
         ]
     

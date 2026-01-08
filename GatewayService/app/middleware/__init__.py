@@ -12,6 +12,58 @@ import time
 logger = logging.getLogger(__name__)
 
 
+class ForwardedHeaderMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to process X-Forwarded-* headers
+    Matches Java's ForwardedHeaderFilter behavior
+    Handles X-Forwarded-Host, X-Forwarded-Proto, X-Forwarded-For, etc.
+    """
+    
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        """
+        Process forwarded headers
+        
+        Args:
+            request: Incoming request
+            call_next: Next middleware/handler
+            
+        Returns:
+            Response
+        """
+        # Store original headers for reference
+        if not hasattr(request.state, 'forwarded'):
+            request.state.forwarded = {}
+        
+        # Process X-Forwarded-Host
+        forwarded_host = request.headers.get('x-forwarded-host')
+        if forwarded_host:
+            request.state.forwarded['host'] = forwarded_host
+            logger.debug(f"X-Forwarded-Host: {forwarded_host}")
+        
+        # Process X-Forwarded-Proto (scheme)
+        forwarded_proto = request.headers.get('x-forwarded-proto')
+        if forwarded_proto:
+            request.state.forwarded['proto'] = forwarded_proto
+            logger.debug(f"X-Forwarded-Proto: {forwarded_proto}")
+        
+        # Process X-Forwarded-For (client IP)
+        forwarded_for = request.headers.get('x-forwarded-for')
+        if forwarded_for:
+            # Get the first IP in the chain (original client)
+            client_ip = forwarded_for.split(',')[0].strip()
+            request.state.forwarded['for'] = client_ip
+            logger.debug(f"X-Forwarded-For: {client_ip}")
+        
+        # Process X-Forwarded-Port
+        forwarded_port = request.headers.get('x-forwarded-port')
+        if forwarded_port:
+            request.state.forwarded['port'] = forwarded_port
+            logger.debug(f"X-Forwarded-Port: {forwarded_port}")
+        
+        response = await call_next(request)
+        return response
+
+
 class TokenRelayMiddleware(BaseHTTPMiddleware):
     """
     Middleware to relay OAuth2 tokens to backend services
@@ -201,3 +253,14 @@ class SessionMiddleware(BaseHTTPMiddleware):
         
         # Session is maintained via cookies by FastAPI
         return response
+
+
+# Export all middleware classes
+__all__ = [
+    'ForwardedHeaderMiddleware',
+    'TokenRelayMiddleware',
+    'DedupeResponseHeaderMiddleware',
+    'RequestLoggingMiddleware',
+    'CORSHeaderMiddleware',
+    'SessionMiddleware'
+]

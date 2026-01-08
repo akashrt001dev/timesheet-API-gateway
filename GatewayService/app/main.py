@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from app.config.settings import settings
 from app.routes import gateway_router, proxy_router
 from app.middleware import (
+    ForwardedHeaderMiddleware,
     TokenRelayMiddleware,
     DedupeResponseHeaderMiddleware,
     RequestLoggingMiddleware,
@@ -70,13 +71,16 @@ def create_app() -> FastAPI:
     )
     
     # Add middleware (order matters - earlier middleware wraps later ones)
-    # Session middleware first
+    # ForwardedHeaderFilter first (highest precedence) - matches Java
+    app.add_middleware(ForwardedHeaderMiddleware)
+    
+    # Session middleware
     app.add_middleware(SessionMiddleware)
     
     # Request logging
     app.add_middleware(RequestLoggingMiddleware)
     
-    # Token relay
+    # Token relay (matches Java TokenRelay filter)
     app.add_middleware(TokenRelayMiddleware)
     
     # Response header deduplication

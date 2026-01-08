@@ -119,26 +119,32 @@ async def home_redirect(
 async def redirect_index_to_ui(request: Request) -> RedirectResponse:
     """
     Redirect root to OAuth2 authorization
-    Extracts subdomain and redirects to appropriate Keycloak realm
+    Extracts subdomain/tenant from hostname (works with both domains and IPs)
+    Matches Java BffApplication.redirectIndexToUi behavior
     
     Returns:
         Redirect response to OAuth2 authorization endpoint
     """
-    # Get hostname from request
-    host = request.headers.get("host", "localhost")
+    # Get hostname from request (check X-Forwarded-Host first for proxy support)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
     hostname = host.split(':')[0]  # Remove port
     
-    # Extract subdomain
-    master_entity = settings.get_master_entity()
-    subdomain = MultiTenantResolver.extract_subdomain(hostname, master_entity)
+    # Extract first part of hostname as subdomain/tenant identifier
+    # Works with: domains (tenant.example.com -> tenant), IPs (127.0.0.1 -> 127), localhost (-> localhost)
+    hostparts = hostname.split(".")
+    subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
     
-    # Get scheme
-    scheme = settings.get_scheme()
+    # Only use master entity as fallback if we couldn't extract any subdomain
+    if not subdomain or subdomain == "":
+        subdomain = settings.get_master_entity()
     
-    # Construct redirect URL
+    # Get scheme (check X-Forwarded-Proto for proxy support)
+    scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
+    
+    # Construct redirect URL - matches Java format
     redirect_url = f"{scheme}://{host}/oauth2/authorization/{subdomain}"
     
-    logger.info(f"Redirecting root request to: {redirect_url}")
+    logger.info(f"Redirecting root request to: {redirect_url} (subdomain: {subdomain}, hostname: {hostname})")
     
     return RedirectResponse(url=redirect_url, status_code=302)
 
@@ -296,6 +302,7 @@ async def get_login_options(
     """
     Get available login options (OAuth2 providers)
     Returns empty list if already authenticated
+    Matches Java GatewayController.getLoginOptions behavior
     
     Args:
         request: Request object
@@ -312,18 +319,23 @@ async def get_login_options(
         logger.debug("User already authenticated")
         return []
     
-    # Get hostname
-    host = request.headers.get("host", "localhost")
+    # Get hostname (check X-Forwarded-Host for proxy support)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
     hostname = host.split(':')[0]
     
-    # Extract subdomain
-    master_entity = settings.get_master_entity()
-    subdomain = MultiTenantResolver.extract_subdomain(hostname, master_entity)
+    # Extract first part of hostname as subdomain/tenant identifier
+    # Works with: domains (tenant.example.com -> tenant), IPs (127.0.0.1 -> 127), localhost (-> localhost)
+    hostparts = hostname.split(".")
+    subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
     
-    # Get scheme
-    scheme = settings.get_scheme()
+    # Only use master entity as fallback if we couldn't extract any subdomain
+    if not subdomain or subdomain == "":
+        subdomain = settings.get_master_entity()
     
-    # Construct login URI for this subdomain
+    # Get scheme (check X-Forwarded-Proto for proxy support)
+    scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
+    
+    # Construct login URI - match Java format (uses scheme from settings or header)
     login_uri = f"{scheme}://{host}/oauth2/authorization/{subdomain}"
     
     login_option = LoginOptionDto(
@@ -342,6 +354,8 @@ async def get_me(
 ) -> UserDto:
     """
     Get current user information from OAuth2 token
+    Matches Java GatewayController.getMe behavior
+    Extracts subject, issuer, and roles from OAuth2/OIDC token
     
     Args:
         token: Bearer token from Authorization header
@@ -354,9 +368,10 @@ async def get_me(
         return UserDto.anonymous()
     
     # Extract user information from token
+    # Java extracts: subject, issuer URL, and authorities (roles)
     user = TokenProcessor.extract_user_info(token)
     
-    logger.info(f"Retrieved user info: subject={user.subject}, roles={user.roles}")
+    logger.info(f"Retrieved user info: subject={user.subject}, issuer={user.issuer}, roles={user.roles}")
     
     return user
 
@@ -367,52 +382,60 @@ async def logout_api(
     token: Optional[str] = Depends(extract_token)
 ) -> Response:
     """
-    Logout API endpoint - returns redirect URI
+    Logout API endpoint - returns redirect URI with 204 No Content
     Clears security context and constructs OIDC logout URL
+    Matches Java GatewayController.logout_api behavior
     
     Args:
         request: Request object
         token: Bearer token
         
     Returns:
-        Response with redirect location header
+        Response with redirect location header (204 No Content)
     """
-    host = request.headers.get("host", "localhost")
+    # Get hostname (check X-Forwarded-Host for proxy support)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
     hostname = host.split(':')[0]
     
-    # Extract subdomain to find appropriate OAuth2 provider
-    master_entity = settings.get_master_entity()
-    subdomain = MultiTenantResolver.extract_subdomain(hostname, master_entity)
+    # Extract first part of hostname as subdomain/tenant identifier
+    hostparts = hostname.split(".")
+    subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
     
     # Get OAuth2 registration for this subdomain
     registrations = settings.get_oauth2_registrations()
     registration = registrations.get(subdomain, {})
-    provider_key = registration.get('provider', f'keycloak-{subdomain}')
     
-    # Get issuer URI
-    providers = settings.get_oauth2_providers()
-    issuer_uri = providers.get(provider_key, '')
+    # Get issuer URI from registration
+    issuer_uri = registration.get('issuer', '')
+    
+    if not issuer_uri:
+        # Fallback to provider lookup
+        provider_key = registration.get('provider', f'keycloak-{subdomain}')
+        providers = settings.get_oauth2_providers()
+        provider_info = providers.get(provider_key, {})
+        issuer_uri = provider_info if isinstance(provider_info, str) else provider_info.get('issuer_uri', '')
     
     # Construct logout URL
     logout_uri = f"{issuer_uri.rstrip('/')}/protocol/openid-connect/logout"
     
+    # Build query parameters
+    params = []
     if token:
-        # Add id_token_hint if available
-        try:
-            # Extract ID token claim
-            logout_uri += f"?id_token_hint={token}"
-        except Exception:
-            pass
+        # Add id_token_hint if available (Java uses idToken.getTokenValue())
+        params.append(f"id_token_hint={token}")
     
-    # Add redirect URI
-    scheme = settings.get_scheme()
+    # Add post_logout_redirect_uri - Java uses headers.getHost().getHostName()
+    scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
     post_logout_redirect = settings.get_post_logout_redirect_path()
-    redirect_uri = f"{scheme}://{host}{post_logout_redirect}"
-    logout_uri += f"&post_logout_redirect_uri={redirect_uri}"
+    redirect_uri = f"{scheme}://{hostname}{post_logout_redirect}"
+    params.append(f"post_logout_redirect_uri={redirect_uri}")
+    
+    if params:
+        logout_uri += "?" + "&".join(params)
     
     logger.info(f"Logging out user - redirect to: {logout_uri}")
     
-    # Return response with location header
+    # Return 204 No Content with Location header (matches Java ResponseEntity.noContent().location())
     return Response(
         status_code=204,
         headers={"Location": logout_uri}
@@ -425,50 +448,62 @@ async def logout(
     token: Optional[str] = Depends(extract_token)
 ) -> JSONResponse:
     """
-    Logout endpoint - returns logout redirect URL in JSON body
+    Logout endpoint - returns logout redirect URL in JSON body with 202 Accepted
+    Matches Java GatewayController.logout behavior
     
     Args:
         request: Request object
         token: Bearer token
         
     Returns:
-        JSON response with redirectURL
+        JSON response with redirectURL (202 Accepted)
     """
-    host = request.headers.get("host", "localhost")
+    # Get hostname (check X-Forwarded-Host for proxy support)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
     hostname = host.split(':')[0]
     
-    # Extract subdomain
-    master_entity = settings.get_master_entity()
-    subdomain = MultiTenantResolver.extract_subdomain(hostname, master_entity)
+    # Extract first part of hostname as subdomain/tenant identifier
+    hostparts = hostname.split(".")
+    subdomain = hostparts[0] if hostparts and hostparts[0] else settings.get_master_entity()
     
     # Get OAuth2 registration
     registrations = settings.get_oauth2_registrations()
     registration = registrations.get(subdomain, {})
-    provider_key = registration.get('provider', f'keycloak-{subdomain}')
     
-    # Get issuer URI
-    providers = settings.get_oauth2_providers()
-    issuer_uri = providers.get(provider_key, '')
+    # Get issuer URI from registration
+    issuer_uri = registration.get('issuer', '')
+    
+    if not issuer_uri:
+        # Fallback to provider lookup
+        provider_key = registration.get('provider', f'keycloak-{subdomain}')
+        providers = settings.get_oauth2_providers()
+        provider_info = providers.get(provider_key, {})
+        issuer_uri = provider_info if isinstance(provider_info, str) else provider_info.get('issuer_uri', '')
     
     # Construct logout URL
     logout_uri = f"{issuer_uri.rstrip('/')}/protocol/openid-connect/logout"
     
+    # Build query parameters
+    params = []
     if token:
-        try:
-            logout_uri += f"?id_token_hint={token}"
-        except Exception:
-            pass
+        params.append(f"id_token_hint={token}")
     
-    # Add redirect URI based on origin header
-    scheme = settings.get_scheme()
-    origin = request.headers.get('origin', f"{scheme}://{host}")
+    # Add redirect URI based on Origin header (Java uses headers.getOrigin())
+    origin = request.headers.get('origin')
+    if not origin:
+        scheme = request.headers.get("x-forwarded-proto") or settings.get_scheme()
+        origin = f"{scheme}://{host}"
+    
     post_logout_redirect = settings.get_post_logout_redirect_path()
     redirect_uri = f"{origin}{post_logout_redirect}"
-    logout_uri += f"&post_logout_redirect_uri={redirect_uri}"
+    params.append(f"post_logout_redirect_uri={redirect_uri}")
+    
+    if params:
+        logout_uri += "?" + "&".join(params)
     
     logger.info(f"User logout initiated - redirect to: {logout_uri}")
     
-    # Return JSON response with redirect URL
+    # Return JSON response with redirect URL (matches Java ResponseEntity.accepted().location().body())
     return JSONResponse(
         status_code=202,
         content={"redirectURL": logout_uri},
